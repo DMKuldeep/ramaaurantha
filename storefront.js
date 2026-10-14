@@ -1,0 +1,546 @@
+const WHATSAPP_NUMBER = "918527479492";
+const INSTAGRAM_HANDLE = "rama_aurantha";
+const CART_KEY = "rama-aurantha-cart-v2";
+const ORDER_KEY = "rama-aurantha-last-order";
+const PROFILE_KEY = "rama-aurantha-profile-v1";
+const ADDRESS_KEY = "rama-aurantha-addresses-v1";
+
+const imagePool = [
+  "photo-1603006905003-be475563bc59",
+  "photo-1602874801007-bd458bb1b8b6",
+  "photo-1602523961358-f9f03dd557db",
+  "photo-1602874801007-bd458bb1b8b6",
+  "photo-1608571423902-eed4a5ad8108",
+  "photo-1603006905003-be475563bc59",
+];
+
+const products = [
+  [
+    "U-01",
+    "Lotus Pond Urli - Mini",
+    "urli",
+    1299,
+    ["Bestseller", "Gift-ready"],
+  ],
+  ["U-02", "Blooming Lotus Candle", "urli", 899, ["Floral", "Hand-poured"]],
+  ["U-03", "Hibiscus Bunch Urli", "urli", 1599, ["Statement piece", "Floral"]],
+  ["U-04", "Floating Lotus Urli", "urli", 1199, ["Bestseller", "Gift-ready"]],
+  ["U-05", "Royal Peacock Diya Set", "urli", 1499, ["Festive", "Set of 2"]],
+  ["U-06", "Sunflower Diya Set", "urli", 1099, ["Festive", "Set of 2"]],
+  [
+    "U-07",
+    "Coral Multi-Wick Urli Trio",
+    "urli",
+    1899,
+    ["Statement piece", "Set of 3"],
+  ],
+  [
+    "U-08",
+    "Elephant Urli Candle Pair",
+    "urli",
+    1399,
+    ["Gift-ready", "Set of 2"],
+  ],
+  ["U-09", "Blossom Urli Candle", "urli", 1199, ["Floral", "Hand-poured"]],
+  ["U-10", "Glitter Lotus Urli", "urli", 1299, ["Bestseller", "Festive"]],
+  [
+    "U-11",
+    "Lotus Pond Boat Urli",
+    "urli",
+    1499,
+    ["Statement piece", "Gift-ready"],
+  ],
+  [
+    "U-12",
+    "Royal Lotus Pond Urli Set",
+    "urli",
+    1999,
+    ["Premium", "Gift-ready"],
+  ],
+  ["U-13", "Lakshmi Charan Urli", "urli", 1199, ["Festive", "Hand-poured"]],
+  ["U-14", "Dry Fruit Urli Candle", "urli", 1399, ["Festive", "Gift-ready"]],
+  ["S-01", "Baby's Breath Jar Candle", "soy", 649, ["Soy wax", "Bestseller"]],
+  ["S-02", "Red Peony Jar Candle", "soy", 749, ["Floral", "Soy wax"]],
+  ["S-03", "Pink Tulip Bouquet Candle", "soy", 899, ["Floral", "Gift-ready"]],
+  ["S-04", "Daisy Trio Candle Set", "soy", 999, ["Set of 3", "Soy wax"]],
+  ["S-05", "White Peony Bud Candles (Set)", "soy", 799, ["Floral", "Set of 2"]],
+  ["S-06", "Embrace Couple Candle", "soy", 899, ["Gift-ready", "Hand-poured"]],
+  ["S-07", "Pink Peony Candle Set", "soy", 1099, ["Floral", "Gift-ready"]],
+  [
+    "S-08",
+    "Classic Colour Jar Candles",
+    "soy",
+    599,
+    ["Custom colour", "Soy wax"],
+  ],
+  ["S-09", "Blush Pink Votive Candles", "soy", 699, ["Set of 4", "Soy wax"]],
+  ["S-10", "Bubble Cube Candle", "soy", 499, ["Modern", "Bestseller"]],
+  ["S-11", "Heart Wax Melts & Candle", "soy", 749, ["Gift-ready", "Soy wax"]],
+  ["S-12", "Gold Leaf Votive Candles", "soy", 799, ["Set of 4", "Festive"]],
+  ["S-13", "Rose Bouquet Ball Candles", "soy", 999, ["Floral", "Gift-ready"]],
+  ["S-14", "Lilac Peony Jar Candle", "soy", 749, ["Floral", "Soy wax"]],
+  ["S-15", "Heart Blossom Candles", "soy", 899, ["Set of 2", "Gift-ready"]],
+  ["S-16", "Daisy Gift Box Candles", "soy", 1199, ["Gift-ready", "Set of 4"]],
+  ["S-17", "Woven Heart Candles", "soy", 899, ["Hand-poured", "Gift-ready"]],
+].map(([code, name, category, price, tags], index) => ({
+  id: code.toLowerCase(),
+  code,
+  name,
+  category,
+  price,
+  tags,
+  image: `https://images.unsplash.com/${imagePool[index % imagePool.length]}?auto=format&fit=crop&w=960&q=85`,
+}));
+
+const app = document.querySelector("#app");
+const cartCount = document.querySelector("#cart-count");
+const money = (amount) =>
+  new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 0,
+  }).format(amount);
+const safe = (value) =>
+  String(value ?? "").replace(
+    /[&<>"']/g,
+    (char) =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      })[char],
+  );
+
+function readStored(key, fallback) {
+  try {
+    return JSON.parse(localStorage.getItem(key)) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+let cart = readStored(CART_KEY, []);
+let profile = readStored(PROFILE_KEY, null);
+let addresses = readStored(ADDRESS_KEY, []);
+let filters = { category: "all", search: "", sort: "featured", tag: "all" };
+
+function saveProfile() {
+  localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+}
+
+function saveAddresses() {
+  localStorage.setItem(ADDRESS_KEY, JSON.stringify(addresses));
+}
+
+function addAddress(address) {
+  const duplicate = addresses.some((saved) =>
+    ["address", "city", "state", "pincode"].every(
+      (key) => saved[key].toLowerCase() === address[key].toLowerCase(),
+    ),
+  );
+  if (!duplicate) addresses.push(address);
+  saveAddresses();
+}
+
+function persistCart() {
+  localStorage.setItem(CART_KEY, JSON.stringify(cart));
+  updateCartCount();
+}
+
+function updateCartCount() {
+  const count = cart.reduce((total, item) => total + item.quantity, 0);
+  cartCount.textContent = count;
+  cartCount.setAttribute("aria-label", `${count} items in cart`);
+}
+
+function routeParts() {
+  return (location.hash.replace(/^#\/?/, "") || "shop").split("/");
+}
+
+function navigate(path) {
+  location.hash = `/${path}`;
+}
+
+function productById(id) {
+  return products.find((product) => product.id === id);
+}
+
+function addToCart(id, quantity = 1) {
+  const product = productById(id);
+  if (!product) return;
+  const existing = cart.find((item) => item.id === id);
+  if (existing) existing.quantity += quantity;
+  else cart.push({ id, quantity });
+  persistCart();
+  const button = document.querySelector(`[data-add="${id}"]`);
+  if (button?.classList.contains("add-button")) {
+    button.classList.add("is-added");
+    button.textContent = "✓";
+    button.setAttribute("aria-label", `${product.name} added to bag`);
+    window.setTimeout(() => {
+      button.classList.remove("is-added");
+      button.textContent = "+";
+      button.setAttribute("aria-label", `Add ${product.name} to cart`);
+    }, 900);
+  }
+  const toast = document.querySelector("#cart-toast");
+  toast.textContent = `${product.name} added to bag`;
+  toast.classList.add("visible");
+  window.clearTimeout(addToCart.toastTimer);
+  addToCart.toastTimer = window.setTimeout(() => toast.classList.remove("visible"), 1800);
+}
+
+function cartDetails() {
+  return cart
+    .map((item) => ({
+      ...item,
+      product: productById(item.id),
+    }))
+    .filter((item) => item.product);
+}
+
+function subtotal() {
+  return cartDetails().reduce(
+    (total, item) => total + item.product.price * item.quantity,
+    0,
+  );
+}
+
+function shipping() {
+  return subtotal() === 0 || subtotal() >= 1499 ? 0 : 99;
+}
+
+function orderSummary() {
+  return `Subtotal: ${money(subtotal())}\nDelivery: ${shipping() ? money(shipping()) : "Free"}\nTotal: ${money(subtotal() + shipping())}`;
+}
+
+function productCard(product, index) {
+  return `<article class="product-card">
+    <a class="product-image" href="#/product/${product.id}" aria-label="View ${safe(product.name)}">
+      <img src="${product.image}" alt="${safe(product.name)}" loading="lazy" onerror="this.src='https://images.unsplash.com/photo-1603006905003-be475563bc59?auto=format&fit=crop&w=960&q=80'">
+      <span class="image-index">${String(index + 1).padStart(2, "0")}</span>
+    </a>
+    <div class="product-copy">
+      <div class="product-meta"><span>${product.code}</span><span>${product.category === "urli" ? "Urli candle" : "Soy wax"}</span></div>
+      <h3><a href="#/product/${product.id}">${safe(product.name)}</a></h3>
+      <div class="tag-list">${product.tags.map((tag) => `<span class="tag">${safe(tag)}</span>`).join("")}</div>
+      <div class="product-buy"><strong>${money(product.price)}</strong><button class="icon-button add-button" type="button" data-add="${product.id}" aria-label="Add ${safe(product.name)} to cart" title="Add to cart">+</button></div>
+    </div>
+  </article>`;
+}
+
+function visibleProducts() {
+  const query = filters.search.trim().toLowerCase();
+  let result = products.filter((product) => {
+    const matchesCategory =
+      filters.category === "all" || product.category === filters.category;
+    const matchesQuery =
+      !query ||
+      `${product.name} ${product.code} ${product.tags.join(" ")}`
+        .toLowerCase()
+        .includes(query);
+    const matchesTag =
+      filters.tag === "all" || product.tags.includes(filters.tag);
+    return matchesCategory && matchesQuery && matchesTag;
+  });
+  if (filters.sort === "price-low")
+    result = [...result].sort((a, b) => a.price - b.price);
+  if (filters.sort === "price-high")
+    result = [...result].sort((a, b) => b.price - a.price);
+  if (filters.sort === "name")
+    result = [...result].sort((a, b) => a.name.localeCompare(b.name));
+  return result;
+}
+
+function renderShop() {
+  const shown = visibleProducts();
+  app.innerHTML = `<section class="shop-intro">
+    <div class="eyebrow">The candle atelier · Est. with care</div>
+    <h1>Small flames.<br><em>Lasting impressions.</em></h1>
+    <p>Hand-poured candles for slow evenings, thoughtful gifting and the moments worth keeping.</p>
+    <a class="text-link" href="#/shop/collection">Shop the collection <span aria-hidden="true">↓</span></a>
+    <div class="shop-note"><span>01 / 03</span><span>Made to order in India</span></div>
+    <div class="hero-photo" role="img" aria-label="Warmly lit handcrafted candle" ></div>
+  </section>
+  <section class="promise-bar" aria-label="Store benefits"><span>Hand-poured, made to order</span><span>Custom colour & fragrance</span><span>Complimentary delivery over ₹1,499</span></section>
+  <section class="collection-section" id="collection">
+    <div class="section-heading"><div><div class="eyebrow">Find your little ritual</div><h2>The collection</h2></div><p>Designed by hand. Made for your home.</p></div>
+    <div class="catalog-tools">
+      <div class="category-tabs" role="group" aria-label="Filter by collection">
+        <button type="button" data-category="all" class="${filters.category === "all" ? "selected" : ""}">All <span>${products.length}</span></button>
+        <button type="button" data-category="urli" class="${filters.category === "urli" ? "selected" : ""}">Urli <span>14</span></button>
+        <button type="button" data-category="soy" class="${filters.category === "soy" ? "selected" : ""}">Soy wax <span>17</span></button>
+      </div>
+      <div class="tool-fields"><label class="search-field"><span class="sr-only">Search products</span><input type="search" id="product-search" placeholder="Search candles" value="${safe(filters.search)}"></label>
+        <label class="select-field"><span class="sr-only">Sort products</span><select id="product-sort"><option value="featured" ${filters.sort === "featured" ? "selected" : ""}>Featured</option><option value="price-low" ${filters.sort === "price-low" ? "selected" : ""}>Price: low to high</option><option value="price-high" ${filters.sort === "price-high" ? "selected" : ""}>Price: high to low</option><option value="name" ${filters.sort === "name" ? "selected" : ""}>Name</option></select></label>
+      </div>
+    </div>
+    <div class="tag-filters" aria-label="Filter by product tag"><span>Popular:</span>${["all", "Bestseller", "Gift-ready", "Floral", "Festive"].map((tag) => `<button type="button" data-tag="${safe(tag)}" class="${filters.tag === tag ? "selected" : ""}">${tag === "all" ? "Everything" : safe(tag)}</button>`).join("")}</div>
+    <p class="result-count" aria-live="polite">Showing ${shown.length} of ${products.length} pieces</p>
+    <div class="product-grid">${shown.length ? shown.map(productCard).join("") : `<div class="no-results"><h3>Nothing by that name just yet.</h3><button class="text-link" data-reset>Reset filters</button></div>`}</div>
+  </section>
+  <section class="custom-callout"><div><div class="eyebrow">Made personal</div><h2>A little more <em>you.</em></h2><p>Choose a colour and fragrance for a candle that feels like it was always yours.</p></div><a class="button button-light" href="https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent("Hi Rama Aurantha, I would like to discuss a custom candle.")}" target="_blank" rel="noopener">Ask about custom orders <span aria-hidden="true">↗</span></a></section>`;
+}
+
+function renderProduct(id) {
+  const product = productById(id);
+  if (!product) return renderNotFound();
+  app.innerHTML = `<section class="detail-layout">
+    <a class="back-link" href="#/shop">← Back to collection</a>
+    <div class="detail-image"><img src="${product.image}" alt="${safe(product.name)}" onerror="this.src='https://images.unsplash.com/photo-1603006905003-be475563bc59?auto=format&fit=crop&w=960&q=80'"></div>
+    <div class="detail-copy"><div class="eyebrow">${product.code} · ${product.category === "urli" ? "Urli candle" : "Soy wax candle"}</div><h1>${safe(product.name)}</h1><div class="detail-price">${money(product.price)}</div><p>Hand-finished in small batches, with considered details and a soft, warm glow. Choose a fragrance at checkout and we will confirm your preferences before making it.</p><div class="tag-list">${product.tags.map((tag) => `<span class="tag">${safe(tag)}</span>`).join("")}</div><button class="button" data-add="${product.id}">Add to bag <span aria-hidden="true">+</span></button><p class="detail-note">Complimentary delivery on orders over ₹1,499. Made to order; dispatch timing is confirmed after purchase.</p><a class="text-link" href="#/cart">View your bag</a></div>
+  </section>`;
+}
+
+function renderCart() {
+  const items = cartDetails();
+  const subtotalAmount = subtotal();
+  app.innerHTML = `<section class="page-shell"><div class="eyebrow">Your selection</div><h1 class="page-title">Shopping bag</h1>${items.length ? `<div class="cart-layout"><div class="cart-lines">${items.map(({ product, quantity }) => `<article class="cart-line"><a class="cart-thumb" href="#/product/${product.id}"><img src="${product.image}" alt="${safe(product.name)}"></a><div class="cart-line-copy"><span class="eyebrow">${product.code}</span><h2><a href="#/product/${product.id}">${safe(product.name)}</a></h2><div class="line-price">${money(product.price)}</div><button type="button" class="remove-link" data-remove="${product.id}">Remove</button></div><div class="quantity-control" aria-label="Quantity for ${safe(product.name)}"><button type="button" data-quantity="${product.id}" data-change="-1" aria-label="Decrease quantity">−</button><span>${quantity}</span><button type="button" data-quantity="${product.id}" data-change="1" aria-label="Increase quantity">+</button></div><strong class="line-total">${money(product.price * quantity)}</strong></article>`).join("")}</div><aside class="order-summary"><h2>Order summary</h2><div class="summary-row"><span>Subtotal</span><span>${money(subtotalAmount)}</span></div><div class="summary-row"><span>Delivery</span><span>${shipping() ? money(shipping()) : "Complimentary"}</span></div><p class="shipping-hint">${subtotalAmount >= 1499 ? "Your delivery is on us." : `Add ${money(1499 - subtotalAmount)} for complimentary delivery.`}</p><div class="summary-row summary-total"><span>Total</span><strong>${money(subtotalAmount + shipping())}</strong></div><a class="button full-width" href="#/checkout">Continue to checkout <span aria-hidden="true">→</span></a><a class="continue-link" href="#/shop">Continue shopping</a></aside></div>` : `<div class="empty-state"><div class="empty-mark">RA</div><h2>Your bag is waiting for its first candle.</h2><p>Explore the collection and find one that feels like home.</p><a class="button" href="#/shop">Explore the collection</a></div>`}</section>`;
+}
+
+function renderAccount() {
+  if (!profile) {
+    app.innerHTML = `<section class="account-shell page-shell"><div class="account-intro"><div class="eyebrow">Your Rama Aurantha</div><h1 class="page-title">Welcome back.</h1><p>Save your contact details and delivery addresses for a smoother checkout.</p></div><form id="login-form" class="account-form"><h2>Sign in or create your profile</h2><label class="field"><span>Your name</span><input name="name" autocomplete="name" required placeholder="Name"></label><label class="field"><span>Email address</span><input name="email" type="email" autocomplete="email" required placeholder="you@example.com"></label><label class="field"><span>Mobile number</span><input name="phone" type="tel" autocomplete="tel" inputmode="tel" pattern="[0-9+][0-9+ ]{7,17}" placeholder="+91 98765 43210"></label><button class="button full-width" type="submit">Continue to account <span aria-hidden="true">→</span></button><p class="account-note">This demo saves your profile on this device only. Verified sign-in and OTP require a connected authentication service.</p></form></section>`;
+    return;
+  }
+
+  app.innerHTML = `<section class="page-shell account-shell"><div class="account-heading"><div><div class="eyebrow">Your Rama Aurantha</div><h1 class="page-title">Hello, ${safe(profile.name.split(" ")[0])}.</h1><p>${safe(profile.email)}${profile.phone ? ` · ${safe(profile.phone)}` : ""}</p></div><button type="button" class="remove-link account-signout" data-signout>Sign out</button></div><div class="address-book"><div class="address-book-heading"><div><div class="eyebrow">Saved for next time</div><h2>Your addresses</h2></div><span>${addresses.length} saved</span></div>${addresses.length ? `<div class="saved-addresses">${addresses.map((address, index) => `<article class="saved-address"><span class="address-number">${String(index + 1).padStart(2, "0")}</span><div><strong>${safe(address.name)}</strong><p>${safe(address.address)}${address.landmark ? `, ${safe(address.landmark)}` : ""}<br>${safe(address.city)}, ${safe(address.state)} ${safe(address.pincode)}<br>${safe(address.phone)}</p></div><button type="button" class="remove-link" data-delete-address="${index}">Remove</button></article>`).join("")}</div>` : `<p class="empty-address">No saved addresses yet. Add one below or save it during checkout.</p>`}<form id="address-form" class="address-form"><h3>Add a delivery address</h3><div class="form-grid"><label class="field full"><span>Full name</span><input name="name" autocomplete="name" required value="${safe(profile.name)}"></label><label class="field full"><span>Street address</span><input name="address" autocomplete="street-address" required placeholder="House / flat, street and area"></label><label class="field"><span>City</span><input name="city" autocomplete="address-level2" required></label><label class="field"><span>State</span><input name="state" autocomplete="address-level1" required></label><label class="field"><span>PIN code</span><input name="pincode" autocomplete="postal-code" inputmode="numeric" pattern="[0-9]{6}" required placeholder="6 digits"></label><label class="field"><span>Landmark <small>Optional</small></span><input name="landmark" placeholder="Nearby landmark"></label><label class="field full"><span>Mobile number</span><input name="phone" type="tel" autocomplete="tel" inputmode="tel" pattern="[0-9+][0-9+ ]{7,17}" required value="${safe(profile.phone || "")}" placeholder="+91 98765 43210"></label></div><button class="button" type="submit">Save address <span aria-hidden="true">+</span></button></form></div><a class="text-link account-shop-link" href="#/shop">Continue shopping <span aria-hidden="true">→</span></a></section>`;
+}
+
+function renderCheckout() {
+  if (!cartDetails().length) return renderCart();
+  const savedAddress = addresses[addresses.length - 1] || {};
+  const customerName = profile?.name || savedAddress.name || "";
+  const customerEmail = profile?.email || "";
+  const customerPhone = profile?.phone || savedAddress.phone || "";
+  app.innerHTML = `<section class="page-shell checkout-shell"><div class="eyebrow">Almost yours</div><h1 class="page-title">Checkout</h1><div class="checkout-layout"><form id="checkout-form" class="checkout-form">
+    <fieldset><legend><span>01</span> Contact</legend><div class="form-grid"><label class="field full"><span>Email address</span><input name="email" type="email" autocomplete="email" required value="${safe(customerEmail)}" placeholder="you@example.com"></label><label class="field full"><span>Mobile number</span><input name="phone" type="tel" autocomplete="tel" inputmode="tel" pattern="[0-9+][0-9+ ]{7,17}" required value="${safe(customerPhone)}" placeholder="+91 98765 43210"></label></div></fieldset>
+    <fieldset><legend><span>02</span> Delivery address</legend><div class="form-grid"><label class="field full"><span>Full name</span><input name="name" autocomplete="name" required value="${safe(customerName)}" placeholder="Name for delivery"></label><label class="field full"><span>Address</span><input name="address" autocomplete="street-address" required value="${safe(savedAddress.address || "")}" placeholder="House / flat, street and area"></label><label class="field"><span>City</span><input name="city" autocomplete="address-level2" required value="${safe(savedAddress.city || "")}"></label><label class="field"><span>State</span><input name="state" autocomplete="address-level1" required value="${safe(savedAddress.state || "")}"></label><label class="field"><span>PIN code</span><input name="pincode" autocomplete="postal-code" inputmode="numeric" pattern="[0-9]{6}" required value="${safe(savedAddress.pincode || "")}" placeholder="6 digits"></label><label class="field"><span>Landmark <small>Optional</small></span><input name="landmark" value="${safe(savedAddress.landmark || "")}" placeholder="Nearby landmark"></label><label class="field full"><span>Order note <small>Optional</small></span><textarea name="note" rows="3" placeholder="Fragrance preference, gift note or delivery detail"></textarea></label><label class="save-address-option field full"><span><input type="checkbox" name="saveAddress" checked> Save this address on this device</span></label></div></fieldset>
+    <fieldset><legend><span>03</span> Payment</legend><div class="payment-options"><label class="payment-option"><input type="radio" name="payment" value="upi" checked><span class="payment-mark">UPI</span><span><strong>UPI transfer</strong><small>Verified payment details will be shared on WhatsApp after order confirmation.</small></span></label><label class="payment-option"><input type="radio" name="payment" value="cod"><span class="payment-mark">COD</span><span><strong>Cash on delivery</strong><small>Pay when your candles arrive. Availability is confirmed by our team.</small></span></label></div><p class="payment-disclaimer">No card or UPI payment is collected on this website. We will confirm stock, delivery and verified payment details with you before charging anything.</p></fieldset>
+    <button class="button full-width submit-order" type="submit">Place order request <span aria-hidden="true">→</span></button><p class="form-footnote">By placing this request, you agree that Rama Aurantha may contact you to confirm the order.</p>
+  </form><aside class="order-summary checkout-summary"><h2>In your order <span>${cart.reduce((sum, item) => sum + item.quantity, 0)}</span></h2>${cartDetails()
+    .map(
+      ({ product, quantity }) =>
+        `<div class="mini-line"><img src="${product.image}" alt=""><div><strong>${safe(product.name)}</strong><small>Qty ${quantity}</small></div><span>${money(product.price * quantity)}</span></div>`,
+    )
+    .join(
+      "",
+    )}<div class="summary-row"><span>Subtotal</span><span>${money(subtotal())}</span></div><div class="summary-row"><span>Delivery</span><span>${shipping() ? money(shipping()) : "Complimentary"}</span></div><div class="summary-row summary-total"><span>Total</span><strong>${money(subtotal() + shipping())}</strong></div><a class="continue-link" href="#/cart">Edit bag</a></aside></div></section>`;
+}
+
+function renderConfirmation() {
+  const order = readStored(ORDER_KEY, null);
+  if (!order) return renderNotFound();
+  const message = [
+    "Hi Rama Aurantha, I have placed an order request.",
+    `Order: ${order.number}`,
+    ...order.items.map(
+      (item) =>
+        `${item.name} x ${item.quantity} - ${money(item.price * item.quantity)}`,
+    ),
+    `Total: ${money(order.total)}`,
+    `Payment preference: ${order.payment === "upi" ? "UPI transfer (please share verified payment details)" : "Cash on delivery"}`,
+    `Deliver to: ${order.customer.name}, ${order.customer.address}, ${order.customer.city}, ${order.customer.state} ${order.customer.pincode}`,
+    `Mobile: ${order.customer.phone}`,
+    `Email: ${order.customer.email}`,
+    order.customer.note ? `Note: ${order.customer.note}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  app.innerHTML = `<section class="confirmation-page"><div class="confirmation-stamp" aria-hidden="true">RA</div><div class="eyebrow">Order request received</div><h1>Thank you, ${safe(order.customer.name.split(" ")[0])}.</h1><p>We have saved your order request. Send the details to our team on WhatsApp so we can confirm availability, delivery timing and your payment instructions.</p><div class="confirmation-number"><span>Order reference</span><strong>${safe(order.number)}</strong></div><div class="confirmation-total"><span>Order total</span><strong>${money(order.total)}</strong></div><p class="confirmation-payment">${order.payment === "upi" ? "UPI selected. Please wait for verified payment details from our official WhatsApp before transferring." : "Cash on delivery selected. Our team will confirm COD availability for your address."}</p><a class="button" href="https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">Confirm on WhatsApp <span aria-hidden="true">↗</span></a><a class="text-link" href="#/shop">Back to the collection</a></section>`;
+}
+
+function renderNotFound() {
+  app.innerHTML = `<section class="empty-state"><div class="eyebrow">Page not found</div><h1>That page has moved.</h1><a class="button" href="#/shop">Return to the collection</a></section>`;
+}
+
+function renderRoute() {
+  const [page, id] = routeParts();
+  const currentRoute = `#/${routeParts().join("/")}`;
+  document.querySelectorAll("[data-nav]").forEach((link) => {
+    link.classList.toggle("active", link.getAttribute("href") === currentRoute);
+  });
+  const accountLink = document.querySelector("[data-account-link]");
+  if (accountLink) {
+    accountLink.href = profile ? "#/account" : "#/login";
+    accountLink.textContent = profile ? "Account" : "Sign in";
+  }
+  if (page === "shop") renderShop();
+  else if (page === "product") renderProduct(id);
+  else if (page === "cart") renderCart();
+  else if (page === "checkout") renderCheckout();
+  else if (page === "confirmation") renderConfirmation();
+  else if (page === "login" || page === "account") renderAccount();
+  else renderNotFound();
+  updateCartCount();
+  if (location.hash.includes("collection"))
+    document.querySelector("#collection")?.scrollIntoView();
+  else window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+app.addEventListener("click", (event) => {
+  if (event.target.closest("[data-signout]")) {
+    profile = null;
+    addresses = [];
+    localStorage.removeItem(PROFILE_KEY);
+    localStorage.removeItem(ADDRESS_KEY);
+    renderRoute();
+    navigate("login");
+    return;
+  }
+  const deleteAddressButton = event.target.closest("[data-delete-address]");
+  if (deleteAddressButton) {
+    addresses.splice(Number(deleteAddressButton.dataset.deleteAddress), 1);
+    saveAddresses();
+    renderAccount();
+    return;
+  }
+  const addButton = event.target.closest("[data-add]");
+  if (addButton) {
+    addToCart(addButton.dataset.add);
+    return;
+  }
+  const categoryButton = event.target.closest("[data-category]");
+  if (categoryButton) {
+    filters.category = categoryButton.dataset.category;
+    renderShop();
+    return;
+  }
+  const tagButton = event.target.closest("[data-tag]");
+  if (tagButton) {
+    filters.tag = tagButton.dataset.tag;
+    renderShop();
+    return;
+  }
+  const quantityButton = event.target.closest("[data-quantity]");
+  if (quantityButton) {
+    const item = cart.find(
+      (entry) => entry.id === quantityButton.dataset.quantity,
+    );
+    if (item) item.quantity += Number(quantityButton.dataset.change);
+    cart = cart.filter((entry) => entry.quantity > 0);
+    persistCart();
+    renderCart();
+    return;
+  }
+  const removeButton = event.target.closest("[data-remove]");
+  if (removeButton) {
+    cart = cart.filter((entry) => entry.id !== removeButton.dataset.remove);
+    persistCart();
+    renderCart();
+    return;
+  }
+  if (event.target.closest("[data-reset]")) {
+    filters = { category: "all", search: "", sort: "featured", tag: "all" };
+    renderShop();
+  }
+});
+
+app.addEventListener("input", (event) => {
+  if (event.target.id === "product-search") {
+    filters.search = event.target.value;
+    const cursor = event.target.selectionStart;
+    renderShop();
+    const input = document.querySelector("#product-search");
+    input.focus();
+    input.setSelectionRange(cursor, cursor);
+  }
+});
+
+app.addEventListener("change", (event) => {
+  if (event.target.id === "product-sort") {
+    filters.sort = event.target.value;
+    renderShop();
+  }
+});
+
+app.addEventListener("submit", (event) => {
+  if (event.target.id === "login-form") {
+    event.preventDefault();
+    if (!event.target.reportValidity()) return;
+    const form = new FormData(event.target);
+    profile = {
+      name: String(form.get("name")).trim(),
+      email: String(form.get("email")).trim(),
+      phone: String(form.get("phone") || "").trim(),
+    };
+    saveProfile();
+    navigate("account");
+    return;
+  }
+
+  if (event.target.id === "address-form") {
+    event.preventDefault();
+    if (!event.target.reportValidity()) return;
+    const form = new FormData(event.target);
+    addAddress(Object.fromEntries(
+      ["name", "address", "city", "state", "pincode", "landmark", "phone"].map(
+        (key) => [key, String(form.get(key) || "").trim()],
+      ),
+    ));
+    renderAccount();
+    return;
+  }
+
+  if (event.target.id !== "checkout-form") return;
+  event.preventDefault();
+  if (!event.target.reportValidity()) return;
+  const form = new FormData(event.target);
+  const number = `RA-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${Math.floor(1000 + Math.random() * 9000)}`;
+  const order = {
+    number,
+    createdAt: new Date().toISOString(),
+    items: cartDetails().map(({ product, quantity }) => ({
+      id: product.id,
+      name: product.name,
+      price: product.price,
+      quantity,
+    })),
+    subtotal: subtotal(),
+    delivery: shipping(),
+    total: subtotal() + shipping(),
+    payment: form.get("payment"),
+    customer: Object.fromEntries(
+      [
+        "name",
+        "email",
+        "phone",
+        "address",
+        "city",
+        "state",
+        "pincode",
+        "landmark",
+        "note",
+      ].map((key) => [key, String(form.get(key) || "").trim()]),
+    ),
+  };
+  profile = {
+    name: order.customer.name,
+    email: order.customer.email,
+    phone: order.customer.phone,
+  };
+  saveProfile();
+  if (form.get("saveAddress")) {
+    addAddress({
+      name: order.customer.name,
+      address: order.customer.address,
+      city: order.customer.city,
+      state: order.customer.state,
+      pincode: order.customer.pincode,
+      landmark: order.customer.landmark,
+      phone: order.customer.phone,
+    });
+  }
+  localStorage.setItem(ORDER_KEY, JSON.stringify(order));
+  cart = [];
+  persistCart();
+  navigate("confirmation");
+});
+
+window.addEventListener("hashchange", renderRoute);
+
+if (!location.hash) location.hash = "/shop";
+else renderRoute();
+updateCartCount();
