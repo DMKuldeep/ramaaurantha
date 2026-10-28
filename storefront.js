@@ -4,6 +4,8 @@ const CART_KEY = "rama-aurantha-cart-v2";
 const ORDER_KEY = "rama-aurantha-last-order";
 const PROFILE_KEY = "rama-aurantha-profile-v1";
 const ADDRESS_KEY = "rama-aurantha-addresses-v1";
+const PRODUCTS_KEY = "rama-aurantha-products-v1";
+const API_URL = "api.php";
 
 const imagePool = [
   "photo-1603006905003-be475563bc59",
@@ -14,7 +16,7 @@ const imagePool = [
   "photo-1603006905003-be475563bc59",
 ];
 
-const products = [
+const starterProducts = [
   [
     "U-01",
     "Lotus Pond Urli - Mini",
@@ -121,10 +123,78 @@ function readStored(key, fallback) {
   }
 }
 
+let products = readStored(PRODUCTS_KEY, starterProducts);
 let cart = readStored(CART_KEY, []);
 let profile = readStored(PROFILE_KEY, null);
 let addresses = readStored(ADDRESS_KEY, []);
 let filters = { category: "all", search: "", sort: "featured", tag: "all" };
+let apiReady = false;
+let backendError = "";
+let adminAuthenticated = false;
+let csrfToken = "";
+let serverCatalogEmpty = false;
+
+async function apiRequest(resource, action = "", options = {}) {
+  const headers = { Accept: "application/json" };
+  if (options.body !== undefined) headers["Content-Type"] = "application/json";
+  if (options.authenticated) headers["X-CSRF-Token"] = csrfToken;
+  const query = new URLSearchParams({ resource });
+  if (action) query.set("action", action);
+  const response = await fetch(`${API_URL}?${query}`, {
+    method: options.method || "GET",
+    credentials: "same-origin",
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`);
+  return result;
+}
+
+function cacheProducts() {
+  try {
+    localStorage.setItem(PRODUCTS_KEY, JSON.stringify(products));
+  } catch {
+    // The server remains the source of truth if the browser cache is full.
+  }
+}
+
+async function loadAdminCatalog() {
+  const result = await apiRequest("products");
+  serverCatalogEmpty = result.products.length === 0;
+  if (serverCatalogEmpty && products.length) {
+    const imported = await apiRequest("products", "import", {
+      method: "POST",
+      authenticated: true,
+      body: { products },
+    });
+    products = imported.products;
+    serverCatalogEmpty = products.length === 0;
+  } else {
+    products = result.products;
+  }
+  cacheProducts();
+}
+
+async function initializeBackend() {
+  try {
+    const result = await apiRequest("products");
+    apiReady = true;
+    serverCatalogEmpty = result.products.length === 0;
+    if (result.products.length) {
+      products = result.products;
+      cacheProducts();
+    }
+    const session = await apiRequest("admin", "session");
+    adminAuthenticated = session.authenticated;
+    csrfToken = session.csrf || "";
+    if (adminAuthenticated) await loadAdminCatalog();
+  } catch (error) {
+    backendError = error.message;
+    apiReady = false;
+  }
+  renderRoute();
+}
 
 function saveProfile() {
   localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
@@ -270,8 +340,8 @@ function renderShop() {
     <div class="catalog-tools">
       <div class="category-tabs" role="group" aria-label="Filter by collection">
         <button type="button" data-category="all" class="${filters.category === "all" ? "selected" : ""}">All <span>${products.length}</span></button>
-        <button type="button" data-category="urli" class="${filters.category === "urli" ? "selected" : ""}">Urli <span>14</span></button>
-        <button type="button" data-category="soy" class="${filters.category === "soy" ? "selected" : ""}">Soy wax <span>17</span></button>
+        <button type="button" data-category="urli" class="${filters.category === "urli" ? "selected" : ""}">Urli <span>${products.filter((product) => product.category === "urli").length}</span></button>
+        <button type="button" data-category="soy" class="${filters.category === "soy" ? "selected" : ""}">Soy wax <span>${products.filter((product) => product.category === "soy").length}</span></button>
       </div>
       <div class="tool-fields"><label class="search-field"><span class="sr-only">Search products</span><input type="search" id="product-search" placeholder="Search candles" value="${safe(filters.search)}"></label>
         <label class="select-field"><span class="sr-only">Sort products</span><select id="product-sort"><option value="featured" ${filters.sort === "featured" ? "selected" : ""}>Featured</option><option value="price-low" ${filters.sort === "price-low" ? "selected" : ""}>Price: low to high</option><option value="price-high" ${filters.sort === "price-high" ? "selected" : ""}>Price: high to low</option><option value="name" ${filters.sort === "name" ? "selected" : ""}>Name</option></select></label>
@@ -356,6 +426,64 @@ function renderNotFound() {
   app.innerHTML = `<section class="empty-state"><div class="eyebrow">Page not found</div><h1>That page has moved.</h1><a class="button" href="#/shop">Return to the collection</a></section>`;
 }
 
+function renderAdmin(editingId = "") {
+  if (!adminAuthenticated) {
+    app.innerHTML = `<section class="page-shell admin-shell"><div class="admin-heading"><div><div class="eyebrow">Studio catalogue</div><h1 class="page-title">Admin sign in</h1><p>Sign in to manage products for the storefront.</p></div><a class="text-link" href="#/shop">View storefront <span aria-hidden="true">↗</span></a></div><form id="admin-login-form" class="admin-form admin-login-form"><div class="admin-form-heading"><div class="eyebrow">Administrator access</div><h2>Welcome back</h2></div><label class="field"><span>Admin password</span><input name="password" type="password" autocomplete="current-password" required></label><button class="button" type="submit">Sign in <span aria-hidden="true">→</span></button><p class="admin-feedback" id="admin-login-feedback" role="status" aria-live="polite">${safe(backendError)}</p></form></section>`;
+    return;
+  }
+  const editing = products.find((product) => product.id === editingId);
+  const values = editing || {
+    code: "",
+    name: "",
+    category: "urli",
+    price: "",
+    tags: [],
+    image: "",
+  };
+  app.innerHTML = `<section class="page-shell admin-shell">
+    <div class="admin-heading"><div><div class="eyebrow">Studio catalogue</div><h1 class="page-title">Product admin</h1><p>Changes are saved to the shared store catalogue.</p></div><div class="admin-heading-actions"><a class="text-link" href="#/shop">View storefront <span aria-hidden="true">↗</span></a><button type="button" class="remove-link" data-admin-logout>Sign out</button></div></div>
+    <div class="admin-notice" role="note"><strong>Connected to the shared catalogue.</strong> Product listings are stored in the rama database and visible to every storefront visitor.</div>
+    <div class="admin-layout">
+      <form id="product-form" class="admin-form" data-editing-id="${safe(editingId)}">
+        <div class="admin-form-heading"><div class="eyebrow">${editing ? "Edit listing" : "New listing"}</div><h2>${editing ? "Update product" : "Add a product"}</h2></div>
+        <label class="field"><span>Product code</span><input name="code" required maxlength="24" value="${safe(values.code)}" placeholder="U-15"></label>
+        <label class="field"><span>Product name</span><input name="name" required maxlength="90" value="${safe(values.name)}" placeholder="Lotus Pond Urli"></label>
+        <div class="form-grid"><label class="field"><span>Collection</span><select name="category"><option value="urli" ${values.category === "urli" ? "selected" : ""}>Urli candle</option><option value="soy" ${values.category === "soy" ? "selected" : ""}>Soy wax</option></select></label><label class="field"><span>Price (₹)</span><input name="price" type="number" min="1" step="1" required value="${safe(values.price)}" placeholder="1299"></label></div>
+        <label class="field"><span>Tags <small>Separate with commas</small></span><input name="tags" maxlength="120" value="${safe(values.tags.join(", "))}" placeholder="Floral, Gift-ready"></label>
+        <div class="admin-image-preview" id="admin-image-preview" ${values.image ? "" : "hidden"}><img src="${safe(values.image)}" alt="Current product image"></div>
+        <label class="field"><span>Upload product image <small>PNG, JPEG, or WebP; stored on the server</small></span><input name="imageFile" type="file" accept="image/png,image/jpeg,image/webp"></label>
+        <label class="field"><span>Or use an image URL</span><input name="imageUrl" type="url" placeholder="https://example.com/product.jpg" ${editing?.image.startsWith("data:") ? "" : `value="${safe(editing?.image || "")}"`}></label>
+        <div class="admin-form-actions"><button class="button" type="submit">${editing ? "Save changes" : "Add listing"} <span aria-hidden="true">→</span></button>${editing ? `<button class="text-link" type="button" data-cancel-edit>Cancel edit</button>` : ""}</div>
+        <p class="admin-feedback" id="admin-feedback" role="status" aria-live="polite"></p>
+      </form>
+      <section class="admin-listing-section" aria-labelledby="admin-listings-title"><div class="admin-listing-heading"><div><div class="eyebrow">${products.length} listings</div><h2 id="admin-listings-title">Your products</h2></div><a class="text-link" href="#/shop">Open shop <span aria-hidden="true">↗</span></a></div><div class="admin-listings">${products.map((product) => `<article class="admin-listing"><img src="${safe(product.image)}" alt="" loading="lazy"><div class="admin-listing-copy"><span>${safe(product.code)} · ${product.category === "urli" ? "Urli" : "Soy wax"}</span><h3>${safe(product.name)}</h3><strong>${money(product.price)}</strong></div><div class="admin-listing-actions"><button type="button" class="admin-action" data-edit-product="${safe(product.id)}" aria-label="Edit ${safe(product.name)}" title="Edit listing">Edit</button><button type="button" class="admin-action admin-delete" data-delete-product="${safe(product.id)}" aria-label="Delete ${safe(product.name)}" title="Delete listing">Delete</button></div></article>`).join("")}</div></section>
+    </div>
+  </section>`;
+}
+
+function resizeProductImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("The image could not be read."));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error("Choose a valid image file."));
+      image.onload = () => {
+        const scale = Math.min(1, 1200 / Math.max(image.naturalWidth, image.naturalHeight));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(image.naturalWidth * scale);
+        canvas.height = Math.round(image.naturalHeight * scale);
+        canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+        const result = canvas.toDataURL("image/webp", 0.78);
+        if (result.length > 900000) reject(new Error("This image is still too large. Try a smaller image."));
+        else resolve(result);
+      };
+      image.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 function renderRoute() {
   const [page, id] = routeParts();
   const currentRoute = `#/${routeParts().join("/")}`;
@@ -373,6 +501,7 @@ function renderRoute() {
   else if (page === "checkout") renderCheckout();
   else if (page === "confirmation") renderConfirmation();
   else if (page === "login" || page === "account") renderAccount();
+  else if (page === "admin") renderAdmin();
   else renderNotFound();
   updateCartCount();
   if (location.hash.includes("collection"))
@@ -381,6 +510,46 @@ function renderRoute() {
 }
 
 app.addEventListener("click", (event) => {
+  if (event.target.closest("[data-admin-logout]")) {
+    apiRequest("admin", "logout", { method: "POST", authenticated: true })
+      .catch(() => {})
+      .finally(() => {
+        adminAuthenticated = false;
+        csrfToken = "";
+        renderAdmin();
+      });
+    return;
+  }
+  const editButton = event.target.closest("[data-edit-product]");
+  if (editButton) {
+    renderAdmin(editButton.dataset.editProduct);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
+  const deleteButton = event.target.closest("[data-delete-product]");
+  if (deleteButton) {
+    const product = productById(deleteButton.dataset.deleteProduct);
+    if (!product || !window.confirm(`Delete “${product.name}” from the catalogue?`)) return;
+    apiRequest("products", "delete", {
+      method: "POST",
+      authenticated: true,
+      body: { id: product.id },
+    }).then(() => {
+      products = products.filter((item) => item.id !== product.id);
+      cart = cart.filter((item) => item.id !== product.id);
+      cacheProducts();
+      persistCart();
+      renderAdmin();
+    }).catch((error) => {
+      renderAdmin();
+      document.querySelector("#admin-feedback").textContent = error.message;
+    });
+    return;
+  }
+  if (event.target.closest("[data-cancel-edit]")) {
+    renderAdmin();
+    return;
+  }
   if (event.target.closest("[data-signout]")) {
     profile = null;
     addresses = [];
@@ -438,6 +607,15 @@ app.addEventListener("click", (event) => {
   }
 });
 
+app.addEventListener("change", (event) => {
+  if (event.target.name !== "imageFile") return;
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const preview = document.querySelector("#admin-image-preview");
+  preview.hidden = false;
+  preview.querySelector("img").src = URL.createObjectURL(file);
+});
+
 app.addEventListener("input", (event) => {
   if (event.target.id === "product-search") {
     filters.search = event.target.value;
@@ -457,6 +635,85 @@ app.addEventListener("change", (event) => {
 });
 
 app.addEventListener("submit", (event) => {
+  if (event.target.id === "admin-login-form") {
+    event.preventDefault();
+    const feedback = document.querySelector("#admin-login-feedback");
+    const password = String(new FormData(event.target).get("password") || "");
+    apiRequest("admin", "login", { method: "POST", body: { password } })
+      .then(async (result) => {
+        adminAuthenticated = true;
+        csrfToken = result.csrf;
+        backendError = "";
+        await loadAdminCatalog();
+        renderAdmin();
+      })
+      .catch((error) => {
+        feedback.textContent = error.message;
+      });
+    return;
+  }
+
+  if (event.target.id === "product-form") {
+    event.preventDefault();
+    const formElement = event.target;
+    const form = new FormData(formElement);
+    const editingId = formElement.dataset.editingId;
+    const existing = products.find((product) => product.id === editingId);
+    const code = String(form.get("code")).trim();
+    const duplicateCode = products.some((product) => product.code.toLowerCase() === code.toLowerCase() && product.id !== editingId);
+    const feedback = document.querySelector("#admin-feedback");
+    if (duplicateCode) {
+      feedback.textContent = "That product code is already in use.";
+      return;
+    }
+    const saveListing = async (image) => {
+      const name = String(form.get("name")).trim();
+      const id = existing?.id || `${code.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${Date.now().toString(36)}`;
+      const product = {
+        id,
+        code,
+        name,
+        category: form.get("category"),
+        price: Number(form.get("price")),
+        tags: String(form.get("tags") || "").split(",").map((tag) => tag.trim()).filter(Boolean),
+        image,
+      };
+      if (!product.image || !Number.isFinite(product.price) || product.price < 1) {
+        feedback.textContent = "Add a valid product image and price.";
+        return;
+      }
+      try {
+        const result = await apiRequest("products", "save", {
+          method: "POST",
+          authenticated: true,
+          body: product,
+        });
+        products = existing
+          ? products.map((item) => item.id === existing.id ? result.product : item)
+          : [...products, result.product];
+        cacheProducts();
+        renderAdmin();
+      } catch (error) {
+        feedback.textContent = error.message;
+      }
+    };
+    const file = form.get("imageFile");
+    const imageUrl = String(form.get("imageUrl") || "").trim();
+    if (file instanceof File && file.size) {
+      resizeProductImage(file).then(saveListing).catch((error) => {
+        feedback.textContent = error.message;
+      });
+    } else {
+      const image = imageUrl || existing?.image || "";
+      if (image && !image.startsWith("data:image/") && !/^https:\/\//i.test(image)) {
+        feedback.textContent = "Use an https image URL or upload an image file.";
+        return;
+      }
+      saveListing(image);
+    }
+    return;
+  }
+
   if (event.target.id === "login-form") {
     event.preventDefault();
     if (!event.target.reportValidity()) return;
@@ -544,3 +801,4 @@ window.addEventListener("hashchange", renderRoute);
 if (!location.hash) location.hash = "/shop";
 else renderRoute();
 updateCartCount();
+initializeBackend();
