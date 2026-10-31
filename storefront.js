@@ -90,6 +90,7 @@ const starterProducts = [
   name,
   category,
   price,
+  stockQuantity: 0,
   tags,
   image: `https://images.unsplash.com/${imagePool[index % imagePool.length]}?auto=format&fit=crop&w=960&q=85`,
 }));
@@ -245,7 +246,19 @@ function addToCart(id, quantity = 1) {
   const product = productById(id);
   if (!product) return;
   const existing = cart.find((item) => item.id === id);
-  if (existing) existing.quantity += quantity;
+  const stockQuantity = Number(product.stockQuantity) || 0;
+  const nextQuantity = (existing?.quantity || 0) + quantity;
+  if (nextQuantity > stockQuantity) {
+    const toast = document.querySelector("#cart-toast");
+    toast.textContent = stockQuantity
+      ? `Only ${stockQuantity} unit(s) of ${product.name} are in stock`
+      : `${product.name} is currently out of stock`;
+    toast.classList.add("visible");
+    window.clearTimeout(addToCart.toastTimer);
+    addToCart.toastTimer = window.setTimeout(() => toast.classList.remove("visible"), 2200);
+    return;
+  }
+  if (existing) existing.quantity = nextQuantity;
   else cart.push({ id, quantity });
   persistCart();
   const button = document.querySelector(`[data-add="${id}"]`);
@@ -300,7 +313,7 @@ function productCard(product, index) {
       <div class="product-meta"><span>${product.code}</span><span>${product.category === "urli" ? "Urli candle" : "Soy wax"}</span></div>
       <h3><a href="#/product/${product.id}">${safe(product.name)}</a></h3>
       <div class="tag-list">${product.tags.map((tag) => `<span class="tag">${safe(tag)}</span>`).join("")}</div>
-      <div class="product-buy"><strong>${money(product.price)}</strong><button class="icon-button add-button" type="button" data-add="${product.id}" aria-label="Add ${safe(product.name)} to cart" title="Add to cart">+</button></div>
+      <div class="product-buy"><div><strong>${money(product.price)}</strong><small class="stock-label">${Number(product.stockQuantity) > 0 ? `${Number(product.stockQuantity)} in stock` : "Out of stock"}</small></div><button class="icon-button add-button" type="button" data-add="${product.id}" aria-label="Add ${safe(product.name)} to cart" title="Add to cart" ${Number(product.stockQuantity) < 1 ? "disabled" : ""}>+</button></div>
     </div>
   </article>`;
 }
@@ -364,14 +377,14 @@ function renderProduct(id) {
   app.innerHTML = `<section class="detail-layout">
     <a class="back-link" href="#/shop">← Back to collection</a>
     <div class="detail-image"><img src="${product.image}" alt="${safe(product.name)}" onerror="this.src='https://images.unsplash.com/photo-1603006905003-be475563bc59?auto=format&fit=crop&w=960&q=80'"></div>
-    <div class="detail-copy"><div class="eyebrow">${product.code} · ${product.category === "urli" ? "Urli candle" : "Soy wax candle"}</div><h1>${safe(product.name)}</h1><div class="detail-price">${money(product.price)}</div><p>Hand-finished in small batches, with considered details and a soft, warm glow. Choose a fragrance at checkout and we will confirm your preferences before making it.</p><div class="tag-list">${product.tags.map((tag) => `<span class="tag">${safe(tag)}</span>`).join("")}</div><button class="button" data-add="${product.id}">Add to bag <span aria-hidden="true">+</span></button><p class="detail-note">Complimentary delivery on orders over ₹1,499. Made to order; dispatch timing is confirmed after purchase.</p><a class="text-link" href="#/cart">View your bag</a></div>
+    <div class="detail-copy"><div class="eyebrow">${product.code} · ${product.category === "urli" ? "Urli candle" : "Soy wax candle"}</div><h1>${safe(product.name)}</h1><div class="detail-price">${money(product.price)}</div><p>${Number(product.stockQuantity) > 0 ? `${Number(product.stockQuantity)} available` : "Currently out of stock"}. Hand-finished in small batches, with considered details and a soft, warm glow.</p><div class="tag-list">${product.tags.map((tag) => `<span class="tag">${safe(tag)}</span>`).join("")}</div><button class="button" data-add="${product.id}" ${Number(product.stockQuantity) < 1 ? "disabled" : ""}>${Number(product.stockQuantity) > 0 ? "Add to bag" : "Out of stock"} <span aria-hidden="true">+</span></button><p class="detail-note">Complimentary delivery on orders over ₹1,499. Made to order; dispatch timing is confirmed after purchase.</p><a class="text-link" href="#/cart">View your bag</a></div>
   </section>`;
 }
 
 function renderCart() {
   const items = cartDetails();
   const subtotalAmount = subtotal();
-  app.innerHTML = `<section class="page-shell"><div class="eyebrow">Your selection</div><h1 class="page-title">Shopping bag</h1>${items.length ? `<div class="cart-layout"><div class="cart-lines">${items.map(({ product, quantity }) => `<article class="cart-line"><a class="cart-thumb" href="#/product/${product.id}"><img src="${product.image}" alt="${safe(product.name)}"></a><div class="cart-line-copy"><span class="eyebrow">${product.code}</span><h2><a href="#/product/${product.id}">${safe(product.name)}</a></h2><div class="line-price">${money(product.price)}</div><button type="button" class="remove-link" data-remove="${product.id}">Remove</button></div><div class="quantity-control" aria-label="Quantity for ${safe(product.name)}"><button type="button" data-quantity="${product.id}" data-change="-1" aria-label="Decrease quantity">−</button><span>${quantity}</span><button type="button" data-quantity="${product.id}" data-change="1" aria-label="Increase quantity">+</button></div><strong class="line-total">${money(product.price * quantity)}</strong></article>`).join("")}</div><aside class="order-summary"><h2>Order summary</h2><div class="summary-row"><span>Subtotal</span><span>${money(subtotalAmount)}</span></div><div class="summary-row"><span>Delivery</span><span>${shipping() ? money(shipping()) : "Complimentary"}</span></div><p class="shipping-hint">${subtotalAmount >= 1499 ? "Your delivery is on us." : `Add ${money(1499 - subtotalAmount)} for complimentary delivery.`}</p><div class="summary-row summary-total"><span>Total</span><strong>${money(subtotalAmount + shipping())}</strong></div><a class="button full-width" href="#/checkout">Continue to checkout <span aria-hidden="true">→</span></a><a class="continue-link" href="#/shop">Continue shopping</a></aside></div>` : `<div class="empty-state"><div class="empty-mark">RA</div><h2>Your bag is waiting for its first candle.</h2><p>Explore the collection and find one that feels like home.</p><a class="button" href="#/shop">Explore the collection</a></div>`}</section>`;
+  app.innerHTML = `<section class="page-shell"><div class="eyebrow">Your selection</div><h1 class="page-title">Shopping bag</h1>${items.length ? `<div class="cart-layout"><div class="cart-lines">${items.map(({ product, quantity }) => `<article class="cart-line"><a class="cart-thumb" href="#/product/${product.id}"><img src="${product.image}" alt="${safe(product.name)}"></a><div class="cart-line-copy"><span class="eyebrow">${product.code}</span><h2><a href="#/product/${product.id}">${safe(product.name)}</a></h2><div class="line-price">${money(product.price)} · ${Number(product.stockQuantity) || 0} in stock</div><button type="button" class="remove-link" data-remove="${product.id}">Remove</button></div><div class="quantity-control" aria-label="Quantity for ${safe(product.name)}"><button type="button" data-quantity="${product.id}" data-change="-1" aria-label="Decrease quantity">−</button><span>${quantity}</span><button type="button" data-quantity="${product.id}" data-change="1" aria-label="Increase quantity" ${quantity >= Number(product.stockQuantity) ? "disabled" : ""}>+</button></div><strong class="line-total">${money(product.price * quantity)}</strong></article>`).join("")}</div><aside class="order-summary"><h2>Order summary</h2><div class="summary-row"><span>Subtotal</span><span>${money(subtotalAmount)}</span></div><div class="summary-row"><span>Delivery</span><span>${shipping() ? money(shipping()) : "Complimentary"}</span></div><p class="shipping-hint">${subtotalAmount >= 1499 ? "Your delivery is on us." : `Add ${money(1499 - subtotalAmount)} for complimentary delivery.`}</p><div class="summary-row summary-total"><span>Total</span><strong>${money(subtotalAmount + shipping())}</strong></div><a class="button full-width" href="#/checkout">Continue to checkout <span aria-hidden="true">→</span></a><a class="continue-link" href="#/shop">Continue shopping</a></aside></div>` : `<div class="empty-state"><div class="empty-mark">RA</div><h2>Your bag is waiting for its first candle.</h2><p>Explore the collection and find one that feels like home.</p><a class="button" href="#/shop">Explore the collection</a></div>`}</section>`;
 }
 
 function renderAccount() {
@@ -456,6 +469,7 @@ function renderAdmin(editingId = "") {
     name: "",
     category: "urli",
     price: "",
+    stockQuantity: 0,
     tags: [],
     image: "",
   };
@@ -468,6 +482,7 @@ function renderAdmin(editingId = "") {
         <label class="field"><span>Product code</span><input name="code" required maxlength="24" value="${safe(values.code)}" placeholder="U-15"></label>
         <label class="field"><span>Product name</span><input name="name" required maxlength="90" value="${safe(values.name)}" placeholder="Lotus Pond Urli"></label>
         <div class="form-grid"><label class="field"><span>Collection</span><select name="category"><option value="urli" ${values.category === "urli" ? "selected" : ""}>Urli candle</option><option value="soy" ${values.category === "soy" ? "selected" : ""}>Soy wax</option></select></label><label class="field"><span>Price (₹)</span><input name="price" type="number" min="1" step="1" required value="${safe(values.price)}" placeholder="1299"></label></div>
+        <label class="field"><span>Available inventory (units)</span><input name="stockQuantity" type="number" min="0" max="1000000" step="1" required value="${safe(values.stockQuantity ?? 0)}" placeholder="0"><small>Only this many units can be ordered. Reserved orders reduce available inventory.</small></label>
         <label class="field"><span>Tags <small>Separate with commas</small></span><input name="tags" maxlength="120" value="${safe(values.tags.join(", "))}" placeholder="Floral, Gift-ready"></label>
         <div class="admin-image-preview" id="admin-image-preview" ${values.image ? "" : "hidden"}><img src="${safe(values.image)}" alt="Current product image"></div>
         <label class="field"><span>Upload product image <small>PNG, JPEG, or WebP; stored on the server</small></span><input name="imageFile" type="file" accept="image/png,image/jpeg,image/webp"></label>
@@ -475,7 +490,7 @@ function renderAdmin(editingId = "") {
         <div class="admin-form-actions"><button class="button" type="submit">${editing ? "Save changes" : "Add listing"} <span aria-hidden="true">→</span></button>${editing ? `<button class="text-link" type="button" data-cancel-edit>Cancel edit</button>` : ""}</div>
         <p class="admin-feedback" id="admin-feedback" role="status" aria-live="polite"></p>
       </form>
-      <section class="admin-listing-section" aria-labelledby="admin-listings-title"><div class="admin-listing-heading"><div><div class="eyebrow">${products.length} listings</div><h2 id="admin-listings-title">Your products</h2></div><a class="text-link" href="#/shop">Open shop <span aria-hidden="true">↗</span></a></div><div class="admin-listings">${products.map((product) => `<article class="admin-listing"><img src="${safe(product.image)}" alt="" loading="lazy"><div class="admin-listing-copy"><span>${safe(product.code)} · ${product.category === "urli" ? "Urli" : "Soy wax"}</span><h3>${safe(product.name)}</h3><strong>${money(product.price)}</strong></div><div class="admin-listing-actions"><button type="button" class="admin-action" data-edit-product="${safe(product.id)}" aria-label="Edit ${safe(product.name)}" title="Edit listing">Edit</button>${adminRole === "owner" ? `<button type="button" class="admin-action admin-delete" data-delete-product="${safe(product.id)}" aria-label="Delete ${safe(product.name)}" title="Delete listing">Delete</button>` : ""}</div></article>`).join("")}</div></section>
+      <section class="admin-listing-section" aria-labelledby="admin-listings-title"><div class="admin-listing-heading"><div><div class="eyebrow">${products.length} listings</div><h2 id="admin-listings-title">Your products</h2></div><a class="text-link" href="#/shop">Open shop <span aria-hidden="true">↗</span></a></div><div class="admin-listings">${products.map((product) => `<article class="admin-listing"><img src="${safe(product.image)}" alt="" loading="lazy"><div class="admin-listing-copy"><span>${safe(product.code)} · ${product.category === "urli" ? "Urli" : "Soy wax"}</span><h3>${safe(product.name)}</h3><strong>${money(product.price)}</strong><small class="stock-label">${Number(product.stockQuantity) || 0} in stock</small></div><div class="admin-listing-actions"><button type="button" class="admin-action" data-edit-product="${safe(product.id)}" aria-label="Edit ${safe(product.name)}" title="Edit listing">Edit</button>${adminRole === "owner" ? `<button type="button" class="admin-action admin-delete" data-delete-product="${safe(product.id)}" aria-label="Delete ${safe(product.name)}" title="Delete listing">Delete</button>` : ""}</div></article>`).join("")}</div></section>
     </div>
     ${adminRole === "owner" ? `<form id="coadmin-form" class="admin-form coadmin-form"><div class="admin-form-heading"><div class="eyebrow">Team access</div><h2>Add a co-admin</h2></div><p>Create a separate login so a trusted helper can add or edit products. Co-admins cannot delete products or create other accounts.</p><div class="form-grid"><label class="field"><span>Co-admin user ID</span><input name="username" required minlength="3" maxlength="40" pattern="[A-Za-z0-9._-]+" autocomplete="off" placeholder="e.g. helper01"></label><label class="field"><span>Temporary password</span><input name="password" type="password" required minlength="12" maxlength="200" autocomplete="new-password" placeholder="At least 12 characters"></label></div><div class="admin-form-actions"><button class="button" type="submit">Create co-admin</button></div><p class="admin-feedback" id="coadmin-feedback" role="status" aria-live="polite"></p></form>` : ""}
   </section>`;
@@ -631,7 +646,19 @@ app.addEventListener("click", (event) => {
     const item = cart.find(
       (entry) => entry.id === quantityButton.dataset.quantity,
     );
-    if (item) item.quantity += Number(quantityButton.dataset.change);
+    if (item) {
+      const product = productById(item.id);
+      const nextQuantity = item.quantity + Number(quantityButton.dataset.change);
+      if (product && nextQuantity > Number(product.stockQuantity)) {
+        const toast = document.querySelector("#cart-toast");
+        toast.textContent = `Only ${Number(product.stockQuantity)} unit(s) of ${product.name} are in stock`;
+        toast.classList.add("visible");
+        window.clearTimeout(addToCart.toastTimer);
+        addToCart.toastTimer = window.setTimeout(() => toast.classList.remove("visible"), 2200);
+      } else {
+        item.quantity = nextQuantity;
+      }
+    }
     cart = cart.filter((entry) => entry.quantity > 0);
     persistCart();
     renderCart();
@@ -676,6 +703,42 @@ app.addEventListener("change", (event) => {
     renderShop();
   }
 });
+
+function completeCheckout(result, payment, customer, saveAddress) {
+  const order = {
+    number: result.orderId,
+    createdAt: new Date().toISOString(),
+    items: result.items,
+    subtotal: result.subtotalPaise / 100,
+    delivery: result.deliveryPaise / 100,
+    total: result.amountPaise / 100,
+    payment,
+    paymentStatus: payment === "upi" ? "PENDING" : result.status,
+    ...(result.statusToken ? { statusToken: result.statusToken } : {}),
+    customer,
+  };
+  profile = {
+    name: customer.name,
+    email: customer.email,
+    phone: customer.phone,
+  };
+  saveProfile();
+  if (saveAddress) {
+    addAddress({
+      name: customer.name,
+      address: customer.address,
+      city: customer.city,
+      state: customer.state,
+      pincode: customer.pincode,
+      landmark: customer.landmark,
+      phone: customer.phone,
+    });
+  }
+  localStorage.setItem(ORDER_KEY, JSON.stringify(order));
+  cart = [];
+  persistCart();
+  return order;
+}
 
 app.addEventListener("submit", (event) => {
   if (event.target.id === "admin-login-form") {
@@ -742,11 +805,14 @@ app.addEventListener("submit", (event) => {
         name,
         category: form.get("category"),
         price: Number(form.get("price")),
+        stockQuantity: Number(form.get("stockQuantity")),
         tags: String(form.get("tags") || "").split(",").map((tag) => tag.trim()).filter(Boolean),
         image,
       };
-      if (!product.image || !Number.isFinite(product.price) || product.price < 1) {
-        feedback.textContent = "Add a valid product image and price.";
+      if (!product.image || !Number.isFinite(product.price) || product.price < 1
+        || !Number.isInteger(product.stockQuantity) || product.stockQuantity < 0
+        || product.stockQuantity > 1000000) {
+        feedback.textContent = "Add a valid product image, price, and whole-number inventory quantity.";
         return;
       }
       try {
@@ -813,121 +879,39 @@ app.addEventListener("submit", (event) => {
   if (!event.target.reportValidity()) return;
   const form = new FormData(event.target);
   const payment = form.get("payment");
-  if (payment === "upi") {
-    const checkoutForm = event.target;
-    const submitButton = checkoutForm.querySelector(".submit-order");
-    const feedback = checkoutForm.querySelector("#checkout-feedback");
-    const customer = Object.fromEntries(
-      [
-        "name",
-        "email",
-        "phone",
-        "address",
-        "city",
-        "state",
-        "pincode",
-        "landmark",
-        "note",
-      ].map((key) => [key, String(form.get(key) || "").trim()]),
-    );
-    submitButton.disabled = true;
-    submitButton.textContent = "Connecting to secure checkout…";
-    feedback.hidden = true;
-    apiRequest("payments", "create", {
-      method: "POST",
-      body: { items: cart.map(({ id, quantity }) => ({ id, quantity })) },
-    }).then((result) => {
-      const order = {
-        number: result.orderId,
-        createdAt: new Date().toISOString(),
-        items: result.items,
-        subtotal: result.subtotalPaise / 100,
-        delivery: result.deliveryPaise / 100,
-        total: result.amountPaise / 100,
-        payment: "upi",
-        paymentStatus: "PENDING",
-        statusToken: result.statusToken,
-        customer,
-      };
-      profile = {
-        name: customer.name,
-        email: customer.email,
-        phone: customer.phone,
-      };
-      saveProfile();
-      if (form.get("saveAddress")) {
-        addAddress({
-          name: customer.name,
-          address: customer.address,
-          city: customer.city,
-          state: customer.state,
-          pincode: customer.pincode,
-          landmark: customer.landmark,
-          phone: customer.phone,
-        });
-      }
-      localStorage.setItem(ORDER_KEY, JSON.stringify(order));
-      cart = [];
-      persistCart();
-      window.location.assign(result.checkoutUrl);
-    }).catch((error) => {
-      feedback.textContent = error.message;
-      feedback.hidden = false;
-      submitButton.disabled = false;
-      submitButton.textContent = "Continue to secure UPI checkout →";
-    });
-    return;
-  }
-
-  const number = `RA-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${Math.floor(1000 + Math.random() * 9000)}`;
-  const order = {
-    number,
-    createdAt: new Date().toISOString(),
-    items: cartDetails().map(({ product, quantity }) => ({
-      id: product.id,
-      name: product.name,
-      price: product.price,
-      quantity,
-    })),
-    subtotal: subtotal(),
-    delivery: shipping(),
-    total: subtotal() + shipping(),
-    payment,
-    customer: Object.fromEntries(
-      [
-        "name",
-        "email",
-        "phone",
-        "address",
-        "city",
-        "state",
-        "pincode",
-        "landmark",
-        "note",
-      ].map((key) => [key, String(form.get(key) || "").trim()]),
-    ),
-  };
-  profile = {
-    name: order.customer.name,
-    email: order.customer.email,
-    phone: order.customer.phone,
-  };
-  saveProfile();
-  if (form.get("saveAddress")) {
-    addAddress({
-      name: order.customer.name,
-      address: order.customer.address,
-      city: order.customer.city,
-      state: order.customer.state,
-      pincode: order.customer.pincode,
-      landmark: order.customer.landmark,
-      phone: order.customer.phone,
-    });
-  }
-  localStorage.setItem(ORDER_KEY, JSON.stringify(order));
-  cart = [];
-  persistCart();
-  navigate("confirmation");
+  const checkoutForm = event.target;
+  const submitButton = checkoutForm.querySelector(".submit-order");
+  const feedback = checkoutForm.querySelector("#checkout-feedback");
+  const customer = Object.fromEntries(
+    [
+      "name",
+      "email",
+      "phone",
+      "address",
+      "city",
+      "state",
+      "pincode",
+      "landmark",
+      "note",
+    ].map((key) => [key, String(form.get(key) || "").trim()]),
+  );
+  submitButton.disabled = true;
+  submitButton.textContent = payment === "upi" ? "Connecting to secure checkout…" : "Checking inventory…";
+  feedback.hidden = true;
+  const isUpi = payment === "upi";
+  apiRequest(isUpi ? "payments" : "orders", isUpi ? "create" : "cod", {
+    method: "POST",
+    body: { items: cart.map(({ id, quantity }) => ({ id, quantity })) },
+  }).then((result) => {
+    completeCheckout(result, payment, customer, Boolean(form.get("saveAddress")));
+    if (isUpi) window.location.assign(result.checkoutUrl);
+    else navigate("confirmation");
+  }).catch((error) => {
+    feedback.textContent = error.message;
+    feedback.hidden = false;
+    submitButton.disabled = false;
+    submitButton.textContent = isUpi ? "Continue to secure UPI checkout →" : "Place order request →";
+  });
 });
 
 app.addEventListener("change", (event) => {

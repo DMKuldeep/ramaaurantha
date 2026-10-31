@@ -2,42 +2,31 @@
 
 ## MySQL and PHP setup
 
-The storefront reads product listings from MySQL through `api.php`. Product images uploaded in admin are written to the `uploads/` directory; the database stores their paths. PHP 8.1+ with PDO MySQL enabled is required; YouPI payments also require PHP cURL.
+The storefront reads product listings and inventory from MySQL through `api.php`. Product images uploaded in admin are written to the `uploads/` directory; the database stores their paths. PHP 8.1+ with PDO MySQL enabled is required; YouPI payments also require PHP cURL.
 
-1. In phpMyAdmin, select the database named `rama`, open the **SQL** tab, and run `schema.sql`. It creates the `products`, `payment_orders`, and `admin_users` tables.
+1. In phpMyAdmin, select the database named `rama`, open the **SQL** tab, and run `schema.sql`. It creates the `products`, `payment_orders`, `payment_order_items`, and `admin_users` tables.
+
+If you already created the old `products`/`payment_orders` tables, `CREATE TABLE IF NOT EXISTS` does not add new columns. In phpMyAdmin, run these migration statements **once** (skip any column already present):
 
 ```sql
-USE rama;
+ALTER TABLE products
+  ADD COLUMN stock_quantity INT UNSIGNED NOT NULL DEFAULT 0;
 
-CREATE TABLE IF NOT EXISTS products (
-	id VARCHAR(100) NOT NULL,
-	code VARCHAR(24) NOT NULL,
-	name VARCHAR(90) NOT NULL,
-	category ENUM('urli', 'soy') NOT NULL,
-	price INT UNSIGNED NOT NULL,
-	tags JSON NOT NULL,
-	image_url TEXT NOT NULL,
-	created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-	PRIMARY KEY (id),
-	UNIQUE KEY products_code_unique (code),
-	KEY products_category_idx (category)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+ALTER TABLE payment_orders
+  MODIFY status ENUM('PENDING', 'COD_PLACED', 'AWAITING_RECONCILIATION', 'MANUAL_REVIEW', 'PAID', 'FAILED', 'EXPIRED', 'CANCELLED', 'UNVERIFIED_SUCCESS', 'CREATE_FAILED') NOT NULL DEFAULT 'PENDING',
+  ADD COLUMN payment_method ENUM('UPI', 'COD') NOT NULL DEFAULT 'UPI',
+  ADD COLUMN stock_released BOOLEAN NOT NULL DEFAULT FALSE;
 
-CREATE TABLE IF NOT EXISTS payment_orders (
+CREATE TABLE IF NOT EXISTS payment_order_items (
   order_id VARCHAR(40) NOT NULL,
-  payment_id VARCHAR(100) NOT NULL,
-  amount_paise BIGINT UNSIGNED NOT NULL,
-  status ENUM('PENDING', 'AWAITING_RECONCILIATION', 'MANUAL_REVIEW', 'PAID', 'FAILED', 'EXPIRED', 'CANCELLED', 'UNVERIFIED_SUCCESS', 'CREATE_FAILED') NOT NULL DEFAULT 'PENDING',
-  status_token_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-  gateway_event VARCHAR(32) NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (order_id),
-  UNIQUE KEY payment_orders_payment_id_unique (payment_id),
-  KEY payment_orders_status_idx (status)
+  product_id VARCHAR(100) NOT NULL,
+  quantity INT UNSIGNED NOT NULL,
+  PRIMARY KEY (order_id, product_id),
+  KEY payment_order_items_product_idx (product_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
+
+Existing products start with zero available units. Sign in to Product admin and set the real stock quantity for every product before enabling checkout. New orders reserve the requested quantity atomically; failed, expired, or cancelled UPI checkouts restore it. COD orders reduce stock when placed.
 
 2. Keep the existing private `config.php`; add the payment settings below to it. For a fresh install, copy `config.example.php` to `config.php` first:
 

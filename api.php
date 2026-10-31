@@ -69,12 +69,152 @@ function database(array $config): PDO
 
 function fetchProducts(PDO $pdo): array
 {
-    $rows = $pdo->query('SELECT id, code, name, category, price, tags, image_url AS image FROM products ORDER BY created_at, code')->fetchAll();
+    $rows = $pdo->query('SELECT id, code, name, category, price, stock_quantity AS stockQuantity, tags, image_url AS image FROM products ORDER BY created_at, code')->fetchAll();
     foreach ($rows as &$row) {
         $row['price'] = (int) $row['price'];
+        $row['stockQuantity'] = (int) $row['stockQuantity'];
         $row['tags'] = json_decode($row['tags'], true) ?: [];
     }
     return $rows;
+}
+
+function reserveOrderInventory(PDO $pdo, array $items, string $paymentMethod): array
+{
+    $requested = [];
+    foreach ($items as $item) {
+        if (!is_array($item)) {
+            throw new InvalidArgumentException('The checkout cart is invalid.');
+        }
+        $id = trim((string) ($item['id'] ?? ''));
+        $quantity = filter_var($item['quantity'] ?? null, FILTER_VALIDATE_INT);
+        if ($id === '' || strlen($id) > 100 || $quantity === false || $quantity < 1 || $quantity > 99
+            || isset($requested[$id])) {
+            throw new InvalidArgumentException('The checkout cart contains an invalid product or quantity.');
+        }
+        $requested[$id] = $quantity;
+    }
+
+    $orderId = 'RA-' . strtoupper(bin2hex(random_bytes(12)));
+    $statusToken = bin2hex(random_bytes(32));
+    $productsById = [];
+    $subtotalPaise = 0;
+    $pdo->beginTransaction();
+    try {
+        $select = $pdo->prepare('SELECT id, name, price, stock_quantity FROM products WHERE id = :id FOR UPDATE');
+        $lockIds = array_keys($requested);
+        sort($lockIds, SORT_STRING);
+        foreach ($lockIds as $id) {
+            $select->execute(['id' => $id]);
+            $product = $select->fetch();
+            if (!$product) {
+                throw new InvalidArgumentException('A product in your cart is no longer available. Refresh the catalogue and try again.');
+            }
+            if ((int) $product['stock_quantity'] < $requested[$id]) {
+                throw new InvalidArgumentException(sprintf(
+                    'Only %d unit(s) of %s are currently in stock.',
+                    (int) $product['stock_quantity'],
+                    $product['name'],
+                ));
+            }
+            $productsById[$id] = $product;
+        }
+
+        $decrement = $pdo->prepare(
+            'UPDATE products SET stock_quantity = stock_quantity - :quantity '
+            . 'WHERE id = :id AND stock_quantity >= :available_quantity',
+        );
+        $insertItem = $pdo->prepare(
+            'INSERT INTO payment_order_items (order_id, product_id, quantity) VALUES (:order_id, :product_id, :quantity)',
+        );
+        $orderItems = [];
+        foreach ($requested as $id => $quantity) {
+            $product = $productsById[$id];
+            $decrement->execute([
+                'quantity' => $quantity,
+                'id' => $id,
+                'available_quantity' => $quantity,
+            ]);
+            if ($decrement->rowCount() !== 1) {
+                throw new InvalidArgumentException(sprintf('The available stock for %s has changed. Please refresh and try again.', $product['name']));
+            }
+            $insertItem->execute(['order_id' => $orderId, 'product_id' => $id, 'quantity' => $quantity]);
+            $price = (int) $product['price'];
+            $subtotalPaise += $price * $quantity * 100;
+            $orderItems[] = [
+                'id' => $id,
+                'name' => $product['name'],
+                'price' => $price,
+                'quantity' => $quantity,
+            ];
+        }
+
+        $deliveryPaise = $subtotalPaise === 0 || $subtotalPaise >= 149900 ? 0 : 9900;
+        $amountPaise = $subtotalPaise + $deliveryPaise;
+        if ($amountPaise < 1) {
+            throw new InvalidArgumentException('Your order total is invalid.');
+        }
+
+        $insertOrder = $pdo->prepare(
+            'INSERT INTO payment_orders (order_id, payment_id, amount_paise, status, payment_method, status_token_hash) '
+            . 'VALUES (:order_id, :payment_id, :amount_paise, :status, :payment_method, :token_hash)',
+        );
+        $insertOrder->execute([
+            'order_id' => $orderId,
+            'payment_id' => $paymentMethod === 'COD' ? 'cod-' . $orderId : 'pending-' . $orderId,
+            'amount_paise' => $amountPaise,
+            'status' => $paymentMethod === 'COD' ? 'COD_PLACED' : 'PENDING',
+            'payment_method' => $paymentMethod,
+            'token_hash' => hash('sha256', $statusToken),
+        ]);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $error;
+    }
+
+    return [
+        'orderId' => $orderId,
+        'statusToken' => $statusToken,
+        'items' => $orderItems,
+        'subtotalPaise' => $subtotalPaise,
+        'deliveryPaise' => $deliveryPaise,
+        'amountPaise' => $amountPaise,
+    ];
+}
+
+function releaseOrderInventory(PDO $pdo, string $orderId, string $status): void
+{
+    $pdo->beginTransaction();
+    try {
+        $statement = $pdo->prepare(
+            'SELECT status, stock_released FROM payment_orders WHERE order_id = :order_id FOR UPDATE',
+        );
+        $statement->execute(['order_id' => $orderId]);
+        $order = $statement->fetch();
+        if (!$order || (bool) $order['stock_released'] || $order['status'] === 'PAID') {
+            $pdo->commit();
+            return;
+        }
+
+        $items = $pdo->prepare('SELECT product_id, quantity FROM payment_order_items WHERE order_id = :order_id');
+        $items->execute(['order_id' => $orderId]);
+        $restore = $pdo->prepare('UPDATE products SET stock_quantity = stock_quantity + :quantity WHERE id = :id');
+        foreach ($items->fetchAll() as $item) {
+            $restore->execute(['quantity' => $item['quantity'], 'id' => $item['product_id']]);
+        }
+        $update = $pdo->prepare(
+            'UPDATE payment_orders SET status = :status, stock_released = TRUE WHERE order_id = :order_id',
+        );
+        $update->execute(['status' => $status, 'order_id' => $orderId]);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $error;
+    }
 }
 
 function isAllowedPaymentUrl(string $url, bool $allowLocalHttp): bool
@@ -153,8 +293,7 @@ function createYoupiPayment(PDO $pdo, array $config, string $orderId, int $amoun
 
     if ($responseBody === false || $httpStatus < 200 || $httpStatus >= 300) {
         error_log('YouPI payment creation failed; HTTP status ' . $httpStatus . ($curlError !== '' ? ', cURL: ' . $curlError : ''));
-        $pdo->prepare('UPDATE payment_orders SET status = \'CREATE_FAILED\' WHERE order_id = :order_id')
-            ->execute(['order_id' => $orderId]);
+        releaseOrderInventory($pdo, $orderId, 'CREATE_FAILED');
         respond(502, ['error' => 'The payment gateway could not create this checkout. Your cart has not been cleared; please try again.']);
     }
 
@@ -168,8 +307,7 @@ function createYoupiPayment(PDO $pdo, array $config, string $orderId, int $amoun
         || ($result['currency'] ?? '') !== 'INR'
         || !isAllowedPaymentUrl($checkoutUrl, $allowLocalHttp)) {
         error_log('YouPI payment creation returned an invalid checkout response.');
-        $pdo->prepare('UPDATE payment_orders SET status = \'CREATE_FAILED\' WHERE order_id = :order_id')
-            ->execute(['order_id' => $orderId]);
+        releaseOrderInventory($pdo, $orderId, 'CREATE_FAILED');
         respond(502, ['error' => 'The payment gateway returned an invalid checkout response. Your cart has not been cleared.']);
     }
 
@@ -218,6 +356,7 @@ function saveProduct(PDO $pdo, array $config, array $product): array
     $name = trim((string) ($product['name'] ?? ''));
     $category = $product['category'] ?? '';
     $price = filter_var($product['price'] ?? null, FILTER_VALIDATE_INT);
+    $stockQuantity = filter_var($product['stockQuantity'] ?? 0, FILTER_VALIDATE_INT);
     $tags = $product['tags'] ?? [];
     $image = trim((string) ($product['image'] ?? ''));
 
@@ -226,6 +365,9 @@ function saveProduct(PDO $pdo, array $config, array $product): array
     }
     if (!in_array($category, ['urli', 'soy'], true) || $price === false || $price < 1 || $price > 10000000) {
         respond(422, ['error' => 'Choose a collection and enter a valid product price.']);
+    }
+    if ($stockQuantity === false || $stockQuantity < 0 || $stockQuantity > 1000000) {
+        respond(422, ['error' => 'Enter available inventory as a whole number from 0 to 1,000,000.']);
     }
     if (!is_array($tags) || count($tags) > 20) {
         respond(422, ['error' => 'Product tags are invalid.']);
@@ -238,8 +380,8 @@ function saveProduct(PDO $pdo, array $config, array $product): array
     $imageUrl = storeImage($image, $config);
     try {
         $statement = $pdo->prepare(
-            'INSERT INTO products (id, code, name, category, price, tags, image_url) VALUES (:id, :code, :name, :category, :price, :tags, :image) '
-            . 'ON DUPLICATE KEY UPDATE code = VALUES(code), name = VALUES(name), category = VALUES(category), price = VALUES(price), tags = VALUES(tags), image_url = VALUES(image_url)',
+            'INSERT INTO products (id, code, name, category, price, stock_quantity, tags, image_url) VALUES (:id, :code, :name, :category, :price, :stock_quantity, :tags, :image) '
+            . 'ON DUPLICATE KEY UPDATE code = VALUES(code), name = VALUES(name), category = VALUES(category), price = VALUES(price), stock_quantity = VALUES(stock_quantity), tags = VALUES(tags), image_url = VALUES(image_url)',
         );
         $statement->execute([
             'id' => $id,
@@ -247,6 +389,7 @@ function saveProduct(PDO $pdo, array $config, array $product): array
             'name' => $name,
             'category' => $category,
             'price' => $price,
+            'stock_quantity' => $stockQuantity,
             'tags' => json_encode($tags, JSON_THROW_ON_ERROR),
             'image' => $imageUrl,
         ]);
@@ -257,7 +400,7 @@ function saveProduct(PDO $pdo, array $config, array $product): array
         throw $error;
     }
 
-    return ['id' => $id, 'code' => $code, 'name' => $name, 'category' => $category, 'price' => $price, 'tags' => $tags, 'image' => $imageUrl];
+    return ['id' => $id, 'code' => $code, 'name' => $name, 'category' => $category, 'price' => $price, 'stockQuantity' => $stockQuantity, 'tags' => $tags, 'image' => $imageUrl];
 }
 
 $configPath = __DIR__ . '/config.php';
@@ -300,80 +443,48 @@ if ($resource === 'payments' && $action === 'create' && $method === 'POST') {
     }
 
     $pdo = database($config);
-    $subtotalPaise = 0;
-    $orderItems = [];
-    $seenIds = [];
-    foreach ($items as $item) {
-        if (!is_array($item)) {
-            respond(422, ['error' => 'The checkout cart is invalid.']);
-        }
-        $id = trim((string) ($item['id'] ?? ''));
-        $quantity = filter_var($item['quantity'] ?? null, FILTER_VALIDATE_INT);
-        if ($id === '' || strlen($id) > 100 || $quantity === false || $quantity < 1 || $quantity > 99
-            || isset($seenIds[$id])) {
-            respond(422, ['error' => 'The checkout cart contains an invalid product or quantity.']);
-        }
-        $seenIds[$id] = true;
-
-        $statement = $pdo->prepare('SELECT id, name, price FROM products WHERE id = :id');
-        $statement->execute(['id' => $id]);
-        $product = $statement->fetch();
-        if (!$product) {
-            respond(422, ['error' => 'A product in your cart is no longer available. Refresh the catalogue and try again.']);
-        }
-
-        $price = (int) $product['price'];
-        $subtotalPaise += $price * $quantity * 100;
-        $orderItems[] = [
-            'id' => $product['id'],
-            'name' => $product['name'],
-            'price' => $price,
-            'quantity' => $quantity,
-        ];
+    try {
+        $order = reserveOrderInventory($pdo, $items, 'UPI');
+    } catch (InvalidArgumentException $error) {
+        respond(422, ['error' => $error->getMessage()]);
     }
-
-    $deliveryPaise = $subtotalPaise === 0 || $subtotalPaise >= 149900 ? 0 : 9900;
-    $amountPaise = $subtotalPaise + $deliveryPaise;
-    if ($amountPaise < 1) {
-        respond(422, ['error' => 'Your order total is invalid.']);
-    }
-
-    $orderId = 'RA-' . strtoupper(bin2hex(random_bytes(12)));
-    $statusToken = bin2hex(random_bytes(32));
-    $insert = $pdo->prepare(
-        'INSERT INTO payment_orders (order_id, payment_id, amount_paise, status, status_token_hash) '
-        . 'VALUES (:order_id, :payment_id, :amount_paise, :status, :token_hash)',
-    );
-    $insert->execute([
-        'order_id' => $orderId,
-        'payment_id' => 'pending-' . $orderId,
-        'amount_paise' => $amountPaise,
-        'status' => 'PENDING',
-        'token_hash' => hash('sha256', $statusToken),
-    ]);
 
     $gateway = createYoupiPayment(
         $pdo,
         $config,
-        $orderId,
-        $amountPaise,
+        $order['orderId'],
+        $order['amountPaise'],
         $siteUrl . '/#/confirmation',
     );
     $update = $pdo->prepare(
         'UPDATE payment_orders SET payment_id = :payment_id WHERE order_id = :order_id',
     );
-    $update->execute(['payment_id' => $gateway['payment_id'], 'order_id' => $orderId]);
+    $update->execute(['payment_id' => $gateway['payment_id'], 'order_id' => $order['orderId']]);
 
     respond(201, [
-        'orderId' => $orderId,
-        'statusToken' => $statusToken,
+        'orderId' => $order['orderId'],
+        'statusToken' => $order['statusToken'],
         'paymentId' => $gateway['payment_id'],
         'checkoutUrl' => $gateway['checkout_url'],
-        'items' => $orderItems,
-        'subtotalPaise' => $subtotalPaise,
-        'deliveryPaise' => $deliveryPaise,
-        'amountPaise' => $amountPaise,
+        'items' => $order['items'],
+        'subtotalPaise' => $order['subtotalPaise'],
+        'deliveryPaise' => $order['deliveryPaise'],
+        'amountPaise' => $order['amountPaise'],
     ]);
+}
+
+if ($resource === 'orders' && $action === 'cod' && $method === 'POST') {
+    $body = readJson();
+    $items = $body['items'] ?? null;
+    if (!is_array($items) || count($items) < 1 || count($items) > 50) {
+        respond(422, ['error' => 'Choose between 1 and 50 products for checkout.']);
+    }
+    try {
+        $order = reserveOrderInventory(database($config), $items, 'COD');
+    } catch (InvalidArgumentException $error) {
+        respond(422, ['error' => $error->getMessage()]);
+    }
+    respond(201, $order + ['status' => 'COD_PLACED']);
 }
 
 if ($resource === 'payments' && $action === 'status' && $method === 'POST') {
@@ -445,25 +556,30 @@ if ($resource === 'payments' && $action === 'webhook' && $method === 'POST') {
 
     $pdo = database($config);
     $statement = $pdo->prepare(
-        'SELECT payment_id, amount_paise FROM payment_orders WHERE order_id = :order_id',
+        'SELECT payment_id, amount_paise, payment_method FROM payment_orders WHERE order_id = :order_id',
     );
     $statement->execute(['order_id' => $orderId]);
     $order = $statement->fetch();
-    if (!$order || !hash_equals((string) $order['payment_id'], $paymentId)
+    if (!$order || $order['payment_method'] !== 'UPI' || !hash_equals((string) $order['payment_id'], $paymentId)
         || (string) $order['amount_paise'] !== (string) $amountPaise) {
         error_log('YouPI webhook did not match a stored payment order.');
         respond(422, ['error' => 'Webhook does not match a stored payment order.']);
     }
 
-    $update = $pdo->prepare(
-        'UPDATE payment_orders SET status = CASE WHEN status = \'PAID\' THEN status ELSE :status END, '
-        . 'gateway_event = :event WHERE order_id = :order_id',
-    );
-    $update->execute([
-        'status' => $statusByEvent[$event],
-        'event' => $event,
-        'order_id' => $orderId,
-    ]);
+    $nextStatus = $statusByEvent[$event];
+    if (in_array($event, ['FAILED', 'EXPIRED', 'CANCELLED'], true)) {
+        releaseOrderInventory($pdo, $orderId, $nextStatus);
+    } else {
+        $update = $pdo->prepare(
+            'UPDATE payment_orders SET status = CASE WHEN status = \'PAID\' THEN status ELSE :status END, '
+            . 'gateway_event = :event WHERE order_id = :order_id',
+        );
+        $update->execute([
+            'status' => $nextStatus,
+            'event' => $event,
+            'order_id' => $orderId,
+        ]);
+    }
     respond(200, ['received' => true]);
 }
 
