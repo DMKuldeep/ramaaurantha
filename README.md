@@ -2,9 +2,9 @@
 
 ## MySQL and PHP setup
 
-The storefront reads product listings from MySQL through `api.php`. Product images uploaded in admin are written to the `uploads/` directory; the database stores their paths. PHP 8.1+ with PDO MySQL enabled is required.
+The storefront reads product listings from MySQL through `api.php`. Product images uploaded in admin are written to the `uploads/` directory; the database stores their paths. PHP 8.1+ with PDO MySQL enabled is required; YouPI payments also require PHP cURL.
 
-1. In phpMyAdmin, select the database named `rama`, open the **SQL** tab, and paste the contents of `schema.sql` (also shown below). Run it to create the `products` table.
+1. In phpMyAdmin, select the database named `rama`, open the **SQL** tab, and run `schema.sql`. It creates the `products`, `payment_orders`, and `admin_users` tables.
 
 ```sql
 USE rama;
@@ -23,9 +23,23 @@ CREATE TABLE IF NOT EXISTS products (
 	UNIQUE KEY products_code_unique (code),
 	KEY products_category_idx (category)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS payment_orders (
+  order_id VARCHAR(40) NOT NULL,
+  payment_id VARCHAR(100) NOT NULL,
+  amount_paise BIGINT UNSIGNED NOT NULL,
+  status ENUM('PENDING', 'AWAITING_RECONCILIATION', 'MANUAL_REVIEW', 'PAID', 'FAILED', 'EXPIRED', 'CANCELLED', 'UNVERIFIED_SUCCESS', 'CREATE_FAILED') NOT NULL DEFAULT 'PENDING',
+  status_token_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  gateway_event VARCHAR(32) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (order_id),
+  UNIQUE KEY payment_orders_payment_id_unique (payment_id),
+  KEY payment_orders_status_idx (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
-2. In the project folder, make a private config copy:
+2. Keep the existing private `config.php`; add the payment settings below to it. For a fresh install, copy `config.example.php` to `config.php` first:
 
 ```sh
 cp config.example.php config.php
@@ -39,12 +53,32 @@ php -r 'echo password_hash("CHOOSE_A_STRONG_PASSWORD", PASSWORD_DEFAULT), PHP_EO
 
 Replace `CHOOSE_A_STRONG_PASSWORD` locally, run the command, and paste its output into `admin_password_hash` in `config.php`. Do not paste the plain password or hash into chat. `config.php` and uploaded images are excluded from Git.
 
-3. For local testing, start PHP in the project folder:
+3. Configure YouPI in the private `config.php`:
+
+```php
+'storefront_url' => 'https://your-store-domain.example',
+'youpi_api_url' => 'https://your-payment-api-domain.example',
+'youpi_merchant_id' => 'YOUR_MERCHANT_ID',
+'youpi_merchant_key' => 'YOUR_PRIVATE_MERCHANT_API_KEY',
+'youpi_webhook_secret' => 'YOUR_WEBHOOK_SECRET',
+```
+
+Deploy YouPI separately on its own Node.js host with HTTPS. Configure the merchant's receiving UPI account and observer in YouPI's admin panel, then set the merchant webhook URL to `https://your-store-domain.example/api.php?resource=payments&action=webhook`. The storefront sends payment creation requests from PHP, so the merchant key and webhook secret are never put in browser JavaScript. Keep these values private; do not send passwords, keys, bank login details, or OTPs in chat.
+
+The YouPI repository identifies itself as an experimental research project, not a certified or production-ready gateway. Its UPI observer alert is not settlement proof: this storefront only marks an order paid after a signed `RECONCILED` webhook matching the amount and payment ID. You must still reconcile the payment against the official bank statement. Obtain permission for the repository's commercial license before publishing, and use a regulated payment provider for real customer payments unless you have independently verified the legal, bank, and compliance requirements.
+
+4. For local testing, start PHP in the project folder:
 
 ```sh
 php -S 127.0.0.1:8000
 ```
 
-Open `http://127.0.0.1:8000`. Open **Product admin** in the footer and sign in with the password you chose. If the `products` table is empty, the first successful admin sign-in imports the catalogue currently stored in that browser. After that, product changes are shared through MySQL.
+Open `http://127.0.0.1:8000`. Open **Product admin** in the footer or visit `http://127.0.0.1:8000/#/admin`. The owner login uses `admin_username` (defaults to `admin`) and the password whose hash is in `admin_password_hash`. Generate the hash locally:
+
+```sh
+php -r 'echo password_hash("YOUR_NEW_PASSWORD", PASSWORD_DEFAULT), PHP_EOL;'
+```
+
+After signing in, use **Add a co-admin** to create a separate user ID and password (at least 12 characters). Share those credentials privately. Co-admins can add and edit products, but only the owner can delete products or create other co-admin accounts. The first owner sign-in imports the catalogue currently stored in that browser if the database catalogue is empty. Run the updated `schema.sql` first; it creates the `admin_users` table used for co-admin accounts.
 
 For deployment, upload the PHP files and `uploads/` directory to a PHP-enabled host, configure the database credentials there, and use HTTPS. The web server must be allowed to write to `uploads/`. Do not deploy the example config as your active config; use a strong unique admin password.

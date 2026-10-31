@@ -131,6 +131,8 @@ let filters = { category: "all", search: "", sort: "featured", tag: "all" };
 let apiReady = false;
 let backendError = "";
 let adminAuthenticated = false;
+let adminRole = "";
+let adminUsername = "";
 let csrfToken = "";
 let serverCatalogEmpty = false;
 
@@ -162,7 +164,7 @@ function cacheProducts() {
 async function loadAdminCatalog() {
   const result = await apiRequest("products");
   serverCatalogEmpty = result.products.length === 0;
-  if (serverCatalogEmpty && products.length) {
+  if (adminRole === "owner" && serverCatalogEmpty && products.length) {
     const imported = await apiRequest("products", "import", {
       method: "POST",
       authenticated: true,
@@ -186,7 +188,9 @@ async function initializeBackend() {
       cacheProducts();
     }
     const session = await apiRequest("admin", "session");
-    adminAuthenticated = session.authenticated;
+    adminAuthenticated = session.authenticated && Boolean(session.role);
+    adminRole = adminAuthenticated ? session.role : "";
+    adminUsername = adminAuthenticated ? session.username : "";
     csrfToken = session.csrf || "";
     if (adminAuthenticated) await loadAdminCatalog();
   } catch (error) {
@@ -388,8 +392,8 @@ function renderCheckout() {
   app.innerHTML = `<section class="page-shell checkout-shell"><div class="eyebrow">Almost yours</div><h1 class="page-title">Checkout</h1><div class="checkout-layout"><form id="checkout-form" class="checkout-form">
     <fieldset><legend><span>01</span> Contact</legend><div class="form-grid"><label class="field full"><span>Email address</span><input name="email" type="email" autocomplete="email" required value="${safe(customerEmail)}" placeholder="you@example.com"></label><label class="field full"><span>Mobile number</span><input name="phone" type="tel" autocomplete="tel" inputmode="tel" pattern="[0-9+][0-9+ ]{7,17}" required value="${safe(customerPhone)}" placeholder="+91 98765 43210"></label></div></fieldset>
     <fieldset><legend><span>02</span> Delivery address</legend><div class="form-grid"><label class="field full"><span>Full name</span><input name="name" autocomplete="name" required value="${safe(customerName)}" placeholder="Name for delivery"></label><label class="field full"><span>Address</span><input name="address" autocomplete="street-address" required value="${safe(savedAddress.address || "")}" placeholder="House / flat, street and area"></label><label class="field"><span>City</span><input name="city" autocomplete="address-level2" required value="${safe(savedAddress.city || "")}"></label><label class="field"><span>State</span><input name="state" autocomplete="address-level1" required value="${safe(savedAddress.state || "")}"></label><label class="field"><span>PIN code</span><input name="pincode" autocomplete="postal-code" inputmode="numeric" pattern="[0-9]{6}" required value="${safe(savedAddress.pincode || "")}" placeholder="6 digits"></label><label class="field"><span>Landmark <small>Optional</small></span><input name="landmark" value="${safe(savedAddress.landmark || "")}" placeholder="Nearby landmark"></label><label class="field full"><span>Order note <small>Optional</small></span><textarea name="note" rows="3" placeholder="Fragrance preference, gift note or delivery detail"></textarea></label><label class="save-address-option field full"><span><input type="checkbox" name="saveAddress" checked> Save this address on this device</span></label></div></fieldset>
-    <fieldset><legend><span>03</span> Payment</legend><div class="payment-options"><label class="payment-option"><input type="radio" name="payment" value="upi" checked><span class="payment-mark">UPI</span><span><strong>UPI transfer</strong><small>Verified payment details will be shared on WhatsApp after order confirmation.</small></span></label><label class="payment-option"><input type="radio" name="payment" value="cod"><span class="payment-mark">COD</span><span><strong>Cash on delivery</strong><small>Pay when your candles arrive. Availability is confirmed by our team.</small></span></label></div><p class="payment-disclaimer">No card or UPI payment is collected on this website. We will confirm stock, delivery and verified payment details with you before charging anything.</p></fieldset>
-    <button class="button full-width submit-order" type="submit">Place order request <span aria-hidden="true">→</span></button><p class="form-footnote">By placing this request, you agree that Rama Aurantha may contact you to confirm the order.</p>
+    <fieldset><legend><span>03</span> Payment</legend><div class="payment-options"><label class="payment-option"><input type="radio" name="payment" value="upi" checked><span class="payment-mark">UPI</span><span><strong>UPI via YouPI</strong><small>Continue to the self-hosted YouPI checkout to pay by UPI.</small></span></label><label class="payment-option"><input type="radio" name="payment" value="cod"><span class="payment-mark">COD</span><span><strong>Cash on delivery</strong><small>Pay when your candles arrive. Availability is confirmed by our team.</small></span></label></div><p class="payment-disclaimer">YouPI is experimental. UPI payments remain pending until a matching bank-statement reconciliation; an alert or browser message alone is not payment confirmation.</p></fieldset>
+    <button class="button full-width submit-order" type="submit">Continue to secure UPI checkout <span aria-hidden="true">→</span></button><p id="checkout-feedback" class="checkout-feedback" role="alert" hidden></p><p class="form-footnote">By placing this request, you agree that Rama Aurantha may contact you to confirm the order.</p>
   </form><aside class="order-summary checkout-summary"><h2>In your order <span>${cart.reduce((sum, item) => sum + item.quantity, 0)}</span></h2>${cartDetails()
     .map(
       ({ product, quantity }) =>
@@ -403,6 +407,21 @@ function renderCheckout() {
 function renderConfirmation() {
   const order = readStored(ORDER_KEY, null);
   if (!order) return renderNotFound();
+  const paymentStatus = order.payment === "upi"
+    ? order.statusToken ? order.paymentStatus || "PENDING" : "NOT_CONNECTED"
+    : "";
+  const paymentStatusText = {
+    NOT_CONNECTED: "This older order is not linked to YouPI. Contact the store before transferring money.",
+    PENDING: "Payment is pending. Complete the UPI checkout and refresh this status.",
+    AWAITING_RECONCILIATION: "Payment was observed, but is not yet confirmed. Wait for bank-statement reconciliation.",
+    MANUAL_REVIEW: "Payment needs manual review. Contact the store before trying again.",
+    PAID: "Payment has been reconciled against a bank statement.",
+    FAILED: "The payment was not completed. You can contact the store before retrying.",
+    EXPIRED: "The payment session expired. Contact the store if you already transferred money.",
+    CANCELLED: "The payment was cancelled. No payment is confirmed.",
+    UNVERIFIED_SUCCESS: "The gateway reported success, but settlement is not verified. Contact the store.",
+    CREATE_FAILED: "The gateway could not start this payment. Your order was not submitted.",
+  }[paymentStatus] || "Payment status is unavailable. Contact the store before taking further action.";
   const message = [
     "Hi Rama Aurantha, I have placed an order request.",
     `Order: ${order.number}`,
@@ -411,7 +430,7 @@ function renderConfirmation() {
         `${item.name} x ${item.quantity} - ${money(item.price * item.quantity)}`,
     ),
     `Total: ${money(order.total)}`,
-    `Payment preference: ${order.payment === "upi" ? "UPI transfer (please share verified payment details)" : "Cash on delivery"}`,
+    `Payment preference: ${order.payment === "upi" ? `YouPI UPI (${paymentStatus})` : "Cash on delivery"}`,
     `Deliver to: ${order.customer.name}, ${order.customer.address}, ${order.customer.city}, ${order.customer.state} ${order.customer.pincode}`,
     `Mobile: ${order.customer.phone}`,
     `Email: ${order.customer.email}`,
@@ -419,7 +438,7 @@ function renderConfirmation() {
   ]
     .filter(Boolean)
     .join("\n");
-  app.innerHTML = `<section class="confirmation-page"><div class="confirmation-stamp" aria-hidden="true">RA</div><div class="eyebrow">Order request received</div><h1>Thank you, ${safe(order.customer.name.split(" ")[0])}.</h1><p>We have saved your order request. Send the details to our team on WhatsApp so we can confirm availability, delivery timing and your payment instructions.</p><div class="confirmation-number"><span>Order reference</span><strong>${safe(order.number)}</strong></div><div class="confirmation-total"><span>Order total</span><strong>${money(order.total)}</strong></div><p class="confirmation-payment">${order.payment === "upi" ? "UPI selected. Please wait for verified payment details from our official WhatsApp before transferring." : "Cash on delivery selected. Our team will confirm COD availability for your address."}</p><a class="button" href="https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">Confirm on WhatsApp <span aria-hidden="true">↗</span></a><a class="text-link" href="#/shop">Back to the collection</a></section>`;
+  app.innerHTML = `<section class="confirmation-page"><div class="confirmation-stamp" aria-hidden="true">RA</div><div class="eyebrow">Order request received</div><h1>Thank you, ${safe(order.customer.name.split(" ")[0])}.</h1><p>${order.payment === "upi" ? "Your order request is saved. Payment is not considered complete until the gateway reports a reconciled UPI transaction." : "We have saved your order request. Send the details to our team on WhatsApp so we can confirm availability and delivery timing."}</p><div class="confirmation-number"><span>Order reference</span><strong>${safe(order.number)}</strong></div><div class="confirmation-total"><span>Order total</span><strong>${money(order.total)}</strong></div><p class="confirmation-payment">${order.payment === "upi" ? safe(paymentStatusText) : "Cash on delivery selected. Our team will confirm COD availability for your address."}</p>${order.payment === "upi" && order.statusToken ? `<button class="button" type="button" data-check-payment>Refresh payment status</button><p id="payment-status-feedback" class="checkout-feedback" role="alert" hidden></p>` : ""}<a class="button" href="https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}" target="_blank" rel="noopener">Contact us on WhatsApp <span aria-hidden="true">↗</span></a><a class="text-link" href="#/shop">Back to the collection</a></section>`;
 }
 
 function renderNotFound() {
@@ -428,7 +447,7 @@ function renderNotFound() {
 
 function renderAdmin(editingId = "") {
   if (!adminAuthenticated) {
-    app.innerHTML = `<section class="page-shell admin-shell"><div class="admin-heading"><div><div class="eyebrow">Studio catalogue</div><h1 class="page-title">Admin sign in</h1><p>Sign in to manage products for the storefront.</p></div><a class="text-link" href="#/shop">View storefront <span aria-hidden="true">↗</span></a></div><form id="admin-login-form" class="admin-form admin-login-form"><div class="admin-form-heading"><div class="eyebrow">Administrator access</div><h2>Welcome back</h2></div><label class="field"><span>Admin password</span><input name="password" type="password" autocomplete="current-password" required></label><button class="button" type="submit">Sign in <span aria-hidden="true">→</span></button><p class="admin-feedback" id="admin-login-feedback" role="status" aria-live="polite">${safe(backendError)}</p></form></section>`;
+    app.innerHTML = `<section class="page-shell admin-shell"><div class="admin-heading"><div><div class="eyebrow">Studio catalogue</div><h1 class="page-title">Admin sign in</h1><p>Sign in to manage products for the storefront.</p></div><a class="text-link" href="#/shop">View storefront <span aria-hidden="true">↗</span></a></div><form id="admin-login-form" class="admin-form admin-login-form"><div class="admin-form-heading"><div class="eyebrow">Administrator access</div><h2>Welcome back</h2></div><label class="field"><span>User ID</span><input name="username" autocomplete="username" required></label><label class="field"><span>Password</span><input name="password" type="password" autocomplete="current-password" required></label><button class="button" type="submit">Sign in <span aria-hidden="true">→</span></button><p class="admin-feedback" id="admin-login-feedback" role="status" aria-live="polite">${safe(backendError)}</p></form></section>`;
     return;
   }
   const editing = products.find((product) => product.id === editingId);
@@ -441,7 +460,7 @@ function renderAdmin(editingId = "") {
     image: "",
   };
   app.innerHTML = `<section class="page-shell admin-shell">
-    <div class="admin-heading"><div><div class="eyebrow">Studio catalogue</div><h1 class="page-title">Product admin</h1><p>Changes are saved to the shared store catalogue.</p></div><div class="admin-heading-actions"><a class="text-link" href="#/shop">View storefront <span aria-hidden="true">↗</span></a><button type="button" class="remove-link" data-admin-logout>Sign out</button></div></div>
+    <div class="admin-heading"><div><div class="eyebrow">Studio catalogue</div><h1 class="page-title">Product admin</h1><p>Signed in as ${safe(adminUsername)} (${adminRole === "owner" ? "Owner admin" : "Co-admin"}). Changes are saved to the shared store catalogue.</p></div><div class="admin-heading-actions"><a class="text-link" href="#/shop">View storefront <span aria-hidden="true">↗</span></a><button type="button" class="remove-link" data-admin-logout>Sign out</button></div></div>
     <div class="admin-notice" role="note"><strong>Connected to the shared catalogue.</strong> Product listings are stored in the rama database and visible to every storefront visitor.</div>
     <div class="admin-layout">
       <form id="product-form" class="admin-form" data-editing-id="${safe(editingId)}">
@@ -456,8 +475,9 @@ function renderAdmin(editingId = "") {
         <div class="admin-form-actions"><button class="button" type="submit">${editing ? "Save changes" : "Add listing"} <span aria-hidden="true">→</span></button>${editing ? `<button class="text-link" type="button" data-cancel-edit>Cancel edit</button>` : ""}</div>
         <p class="admin-feedback" id="admin-feedback" role="status" aria-live="polite"></p>
       </form>
-      <section class="admin-listing-section" aria-labelledby="admin-listings-title"><div class="admin-listing-heading"><div><div class="eyebrow">${products.length} listings</div><h2 id="admin-listings-title">Your products</h2></div><a class="text-link" href="#/shop">Open shop <span aria-hidden="true">↗</span></a></div><div class="admin-listings">${products.map((product) => `<article class="admin-listing"><img src="${safe(product.image)}" alt="" loading="lazy"><div class="admin-listing-copy"><span>${safe(product.code)} · ${product.category === "urli" ? "Urli" : "Soy wax"}</span><h3>${safe(product.name)}</h3><strong>${money(product.price)}</strong></div><div class="admin-listing-actions"><button type="button" class="admin-action" data-edit-product="${safe(product.id)}" aria-label="Edit ${safe(product.name)}" title="Edit listing">Edit</button><button type="button" class="admin-action admin-delete" data-delete-product="${safe(product.id)}" aria-label="Delete ${safe(product.name)}" title="Delete listing">Delete</button></div></article>`).join("")}</div></section>
+      <section class="admin-listing-section" aria-labelledby="admin-listings-title"><div class="admin-listing-heading"><div><div class="eyebrow">${products.length} listings</div><h2 id="admin-listings-title">Your products</h2></div><a class="text-link" href="#/shop">Open shop <span aria-hidden="true">↗</span></a></div><div class="admin-listings">${products.map((product) => `<article class="admin-listing"><img src="${safe(product.image)}" alt="" loading="lazy"><div class="admin-listing-copy"><span>${safe(product.code)} · ${product.category === "urli" ? "Urli" : "Soy wax"}</span><h3>${safe(product.name)}</h3><strong>${money(product.price)}</strong></div><div class="admin-listing-actions"><button type="button" class="admin-action" data-edit-product="${safe(product.id)}" aria-label="Edit ${safe(product.name)}" title="Edit listing">Edit</button>${adminRole === "owner" ? `<button type="button" class="admin-action admin-delete" data-delete-product="${safe(product.id)}" aria-label="Delete ${safe(product.name)}" title="Delete listing">Delete</button>` : ""}</div></article>`).join("")}</div></section>
     </div>
+    ${adminRole === "owner" ? `<form id="coadmin-form" class="admin-form coadmin-form"><div class="admin-form-heading"><div class="eyebrow">Team access</div><h2>Add a co-admin</h2></div><p>Create a separate login so a trusted helper can add or edit products. Co-admins cannot delete products or create other accounts.</p><div class="form-grid"><label class="field"><span>Co-admin user ID</span><input name="username" required minlength="3" maxlength="40" pattern="[A-Za-z0-9._-]+" autocomplete="off" placeholder="e.g. helper01"></label><label class="field"><span>Temporary password</span><input name="password" type="password" required minlength="12" maxlength="200" autocomplete="new-password" placeholder="At least 12 characters"></label></div><div class="admin-form-actions"><button class="button" type="submit">Create co-admin</button></div><p class="admin-feedback" id="coadmin-feedback" role="status" aria-live="polite"></p></form>` : ""}
   </section>`;
 }
 
@@ -510,11 +530,34 @@ function renderRoute() {
 }
 
 app.addEventListener("click", (event) => {
+  const checkPaymentButton = event.target.closest("[data-check-payment]");
+  if (checkPaymentButton) {
+    const order = readStored(ORDER_KEY, null);
+    if (!order?.statusToken) return;
+    const feedback = document.querySelector("#payment-status-feedback");
+    checkPaymentButton.disabled = true;
+    apiRequest("payments", "status", {
+      method: "POST",
+      body: { orderId: order.number, token: order.statusToken },
+    }).then((result) => {
+      order.paymentStatus = result.status;
+      localStorage.setItem(ORDER_KEY, JSON.stringify(order));
+      renderConfirmation();
+    }).catch((error) => {
+      feedback.textContent = error.message;
+      feedback.hidden = false;
+    }).finally(() => {
+      checkPaymentButton.disabled = false;
+    });
+    return;
+  }
   if (event.target.closest("[data-admin-logout]")) {
     apiRequest("admin", "logout", { method: "POST", authenticated: true })
       .catch(() => {})
       .finally(() => {
         adminAuthenticated = false;
+        adminRole = "";
+        adminUsername = "";
         csrfToken = "";
         renderAdmin();
       });
@@ -638,10 +681,13 @@ app.addEventListener("submit", (event) => {
   if (event.target.id === "admin-login-form") {
     event.preventDefault();
     const feedback = document.querySelector("#admin-login-feedback");
+    const username = String(new FormData(event.target).get("username") || "").trim();
     const password = String(new FormData(event.target).get("password") || "");
-    apiRequest("admin", "login", { method: "POST", body: { password } })
+    apiRequest("admin", "login", { method: "POST", body: { username, password } })
       .then(async (result) => {
         adminAuthenticated = true;
+        adminRole = result.role;
+        adminUsername = result.username;
         csrfToken = result.csrf;
         backendError = "";
         await loadAdminCatalog();
@@ -650,6 +696,27 @@ app.addEventListener("submit", (event) => {
       .catch((error) => {
         feedback.textContent = error.message;
       });
+    return;
+  }
+
+  if (event.target.id === "coadmin-form") {
+    event.preventDefault();
+    const form = event.target;
+    const values = new FormData(form);
+    const feedback = document.querySelector("#coadmin-feedback");
+    apiRequest("admin", "create-user", {
+      method: "POST",
+      authenticated: true,
+      body: {
+        username: String(values.get("username") || "").trim(),
+        password: String(values.get("password") || ""),
+      },
+    }).then((result) => {
+      form.reset();
+      feedback.textContent = `Co-admin "${result.username}" created. Share the user ID and password with them privately.`;
+    }).catch((error) => {
+      feedback.textContent = error.message;
+    });
     return;
   }
 
@@ -745,6 +812,73 @@ app.addEventListener("submit", (event) => {
   event.preventDefault();
   if (!event.target.reportValidity()) return;
   const form = new FormData(event.target);
+  const payment = form.get("payment");
+  if (payment === "upi") {
+    const checkoutForm = event.target;
+    const submitButton = checkoutForm.querySelector(".submit-order");
+    const feedback = checkoutForm.querySelector("#checkout-feedback");
+    const customer = Object.fromEntries(
+      [
+        "name",
+        "email",
+        "phone",
+        "address",
+        "city",
+        "state",
+        "pincode",
+        "landmark",
+        "note",
+      ].map((key) => [key, String(form.get(key) || "").trim()]),
+    );
+    submitButton.disabled = true;
+    submitButton.textContent = "Connecting to secure checkout…";
+    feedback.hidden = true;
+    apiRequest("payments", "create", {
+      method: "POST",
+      body: { items: cart.map(({ id, quantity }) => ({ id, quantity })) },
+    }).then((result) => {
+      const order = {
+        number: result.orderId,
+        createdAt: new Date().toISOString(),
+        items: result.items,
+        subtotal: result.subtotalPaise / 100,
+        delivery: result.deliveryPaise / 100,
+        total: result.amountPaise / 100,
+        payment: "upi",
+        paymentStatus: "PENDING",
+        statusToken: result.statusToken,
+        customer,
+      };
+      profile = {
+        name: customer.name,
+        email: customer.email,
+        phone: customer.phone,
+      };
+      saveProfile();
+      if (form.get("saveAddress")) {
+        addAddress({
+          name: customer.name,
+          address: customer.address,
+          city: customer.city,
+          state: customer.state,
+          pincode: customer.pincode,
+          landmark: customer.landmark,
+          phone: customer.phone,
+        });
+      }
+      localStorage.setItem(ORDER_KEY, JSON.stringify(order));
+      cart = [];
+      persistCart();
+      window.location.assign(result.checkoutUrl);
+    }).catch((error) => {
+      feedback.textContent = error.message;
+      feedback.hidden = false;
+      submitButton.disabled = false;
+      submitButton.textContent = "Continue to secure UPI checkout →";
+    });
+    return;
+  }
+
   const number = `RA-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${Math.floor(1000 + Math.random() * 9000)}`;
   const order = {
     number,
@@ -758,7 +892,7 @@ app.addEventListener("submit", (event) => {
     subtotal: subtotal(),
     delivery: shipping(),
     total: subtotal() + shipping(),
-    payment: form.get("payment"),
+    payment,
     customer: Object.fromEntries(
       [
         "name",
@@ -794,6 +928,16 @@ app.addEventListener("submit", (event) => {
   cart = [];
   persistCart();
   navigate("confirmation");
+});
+
+app.addEventListener("change", (event) => {
+  if (event.target.name !== "payment") return;
+  const submitButton = document.querySelector(".submit-order");
+  if (submitButton) {
+    submitButton.textContent = event.target.value === "upi"
+      ? "Continue to secure UPI checkout →"
+      : "Place order request →";
+  }
 });
 
 window.addEventListener("hashchange", renderRoute);

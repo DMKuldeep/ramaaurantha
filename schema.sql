@@ -14,3 +14,28 @@ CREATE TABLE IF NOT EXISTS products (
   UNIQUE KEY products_code_unique (code),
   KEY products_category_idx (category)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS payment_orders (
+  order_id VARCHAR(40) NOT NULL,
+  payment_id VARCHAR(100) NOT NULL,
+  amount_paise BIGINT UNSIGNED NOT NULL,
+  status ENUM('PENDING', 'AWAITING_RECONCILIATION', 'MANUAL_REVIEW', 'PAID', 'FAILED', 'EXPIRED', 'CANCELLED', 'UNVERIFIED_SUCCESS', 'CREATE_FAILED') NOT NULL DEFAULT 'PENDING',
+  status_token_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  gateway_event VARCHAR(32) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (order_id),
+  UNIQUE KEY payment_orders_payment_id_unique (payment_id),
+  KEY payment_orders_status_idx (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS admin_users (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  username VARCHAR(40) NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  role ENUM('co_admin') NOT NULL DEFAULT 'co_admin',
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY admin_users_username_unique (username)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

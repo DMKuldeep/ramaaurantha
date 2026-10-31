@@ -654,6 +654,15 @@ img {
   border: 1px solid var(--line);
   background: var(--surface);
 }
+.coadmin-form {
+  max-width: 760px;
+  margin-top: 28px;
+}
+.coadmin-form > p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
 .admin-form-heading h2,
 .admin-listing-heading h2 {
   margin: 0;
@@ -1207,6 +1216,17 @@ img {
 }
 .submit-order {
   min-height: 54px;
+}
+.submit-order:disabled,
+[data-check-payment]:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.checkout-feedback:not([hidden]) {
+  margin: 10px 0;
+  color: #8d342b;
+  font-size: 11px;
+  line-height: 1.5;
 }
 .checkout-summary {
   top: 102px;
